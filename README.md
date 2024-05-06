@@ -9,7 +9,7 @@ Scripts related to key statistical analysis results from Pölönen et al. The ge
 ## Accessing processed data:
 - See supplementary tables of the paper
 
-## Gene expression and other files not included in the supplementary tables:
+## Gene expression and other data not included in the supplementary tables:
 - Data DOI: https://doi.org/10.7303/syn54032669
 - Get synapse credentials https://www.synapse.org
 - Access synapse project syn54032669
