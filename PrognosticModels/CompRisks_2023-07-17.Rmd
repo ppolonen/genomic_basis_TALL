@@ -41,13 +41,10 @@ For each event type, we also filtered to include only factor levels or variables
 
 ```{r}
 # Define results directory
-res.dir <- "Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Results/CompetingRisks/"
+res.dir <- getwd()
 
 # load data
-# data path on cluster
-#load("/home/aseffern/PetriProject/Jan2023Data/MULLI-T-ALL-GM-Teachey_outcome_data.Rdata")
-# data path locally
-load("Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Data/Data_1309Samples.RData")
+load("Data_1309Samples.RData")
 
 
 # Create grouped variables
