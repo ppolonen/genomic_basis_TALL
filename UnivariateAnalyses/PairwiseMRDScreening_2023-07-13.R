@@ -15,19 +15,16 @@ library(stringr)
 library(writexl)
 
 # Source the univariate screening function
-source("Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/Code/Functions/univariate_screen_pairwiseMRD.R")
+source("univariate_screen_pairwiseMRD.R")
 # Source global test univariate screening function
-source("Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/Code/Functions/univariate_screen_pairwiseMRD_gt.R")
+source("univariate_screen_pairwiseMRD_gt.R")
 
 
 # Define results directory
-res.dir <- "Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Results/UnivariateAnalyses/PairwiseMRD/"
+res.dir <- getwd()
 
 # load data
-# data path on cluster
-#load("/home/aseffern/PetriProject/Jan2023Data/MULLI-T-ALL-GM-Teachey_outcome_data.Rdata")
-# data path locally
-load("Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Data/Data_1309Samples.RData")
+load("\Data_1309Samples.RData")
 
 # Create grouped variables
 annot$MRD.ord <- ifelse(is.na(annot$Day.29.MRD), NA, ifelse(annot$Day.29.MRD<0.1, "Negative", ifelse(annot$Day.29.MRD<10, "Low Positive", "High Positive")))
