@@ -3,8 +3,7 @@
 ## Description:
 Scripts related to key statistical analysis results Pölönen et al. The genomic basis of childhood T-lineage acute lymphoblastic leukemia
 
-## Note:
-If you use the data, analysis, results, Please cite:
+## If you use the data or results in your work, Please cite:
 - Pölönen et al. 
 
 ## Accessing processed data:
@@ -19,6 +18,10 @@ If you use the data, analysis, results, Please cite:
 		pip install synapseclient
 		synapse get syn54032669 -r
 		```
-- Accessing raw data:
+## Accessing raw data:
 - WGS/WES/RNA: phs002276.v2.p1, phs000218, phs000464 or https://portal.kidsfirstdrc.org/dashboard
 - HICHIP/ATAC/Isoseq/other sequencing data: EGAS50000000016
+
+## Data visualization in the ProteinPaint and GenomePaint:
+https://viz.stjude.cloud/mullighan-lab/collection/the-genomic-basis-of-childhood-t-lineage-acute-lymphoblastic-leukemia~29
+
