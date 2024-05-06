@@ -1,0 +1,1287 @@
+---
+title: "T-ALL X01 Outcome Prediction - Univariate Screening Results"
+author: "AES"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    df_print: paged
+    number_sections: yes
+    highlight: haddock
+  html_notebook:
+    toc: yes
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(table1)
+library(BeSS)
+library(glmnet)
+library(survival)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(partykit)
+library(ranger)
+library(ggplot2)
+library(survminer)
+library(forestplot)
+library(readxl)
+library(DT)
+library(dplyr)
+```
+
+# Introduction
+
+We conducted univariate analyses of the molecular data sets with four endpoints: OS, EFS, DFS, and MRD. For the survival endpoints, we fit Firth-penalized Cox models. We also explored adjusting for ordinal MRD ($<0.1\%$, $0.1-10\%$, and $>10\%$) by including it as an additional covariate in the Cox models. In both the unadjusted and adjusted analyses, we transformed $DFS=0$ to $DFS=0.5$ in order to fit the Firth-penalized Cox model. For MRD as an endpoint, we used binary MRD ($<0.1\%$ vs. $\geq 0.1\%$) and fit Firth-penalized logistic regression models. We summarize the findings in forest plots showing log hazard ratios and $95\%$ confidence intervals. Significance was determined as $P<0.05$. 
+
+# Setup
+
+```{r}
+# Load Filtered Data
+load("Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Data/Data_1309Samples.RData")
+```
+
+```{r}
+# Define results directory
+res.dir <- "Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Results/UnivariateAnalyses/"
+```
+
+
+```{r, echo=FALSE}
+# Forest plot function
+create_forestplot <- function(est, lowerci, upperci, p, q, MolecularFeature, feat.name, title.name){
+  temp.df <- cbind.data.frame(est, lowerci, upperci, p, q, MolecularFeature)
+  colnames(temp.df) <- c("est", "Lower", "Upper", "P.old",
+                         "Q.old", "MolecularFeature")
+  temp.df$Est <- log2(exp(temp.df$est))
+  temp.df$logLower <- log(temp.df$Lower, base=2)
+  temp.df$logUpper <- log(temp.df$Upper, base=2)
+  temp.df$p <-round(temp.df$P.old, digits=3)
+  temp.df$q <- round(temp.df$Q.old, digits=3)
+  temp.df <- temp.df[order(temp.df$q),]
+  fp <- temp.df |> forestplot(mean=Est, lower=logLower, upper=logUpper, labeltext=c(MolecularFeature, p, q), xlab="log2(HR)", title=paste(title.name))|> 
+  fp_set_style(box = "royalblue",
+               line = "darkblue",
+               summary = "royalblue",
+               align = "lrrr",
+               hrz_lines = "#999999",
+               txt_gp = fpTxtGp(xlab=gpar(cex=1.2), ticks=gpar(cex=1.2))) |> 
+   fp_add_header(MolecularFeature=paste(feat.name), p="P-value",
+                q="q-value")
+  return(fp)
+}
+```
+
+
+# M1 Classifying Drivers
+
+```{r}
+setwd(res.dir)
+M1.uni <- read_xlsx("M1_Uni_Screen_2023-06-30.xlsx")
+```
+
+```{r}
+v1 <- c("Model", paste0("Number Fail to Converge out of ", nrow(M1.uni)))
+v2 <- c("OS", length(M1.uni$MolecularFeature[which(M1.uni$OS.WarnFlag=="TRUE")]))
+v3 <- c("OS.adj", length(M1.uni$MolecularFeature[which(M1.uni$OS.WarnFlag.adj=="TRUE")]))
+v4 <- c("EFS", length(M1.uni$MolecularFeature[which(M1.uni$EFS.WarnFlag=="TRUE")]))
+v5 <- c("EFS.adj", length(M1.uni$MolecularFeature[which(M1.uni$EFS.WarnFlag.adj=="TRUE")]))
+v6 <- c("DFS", length(M1.uni$MolecularFeature[which(M1.uni$DFS.WarnFlag=="TRUE")]))
+v7<- c("DFS.adj", length(M1.uni$MolecularFeature[which(M1.uni$DFS.WarnFlag.adj=="TRUE")]))
+v8 <- c("MRD", length(M1.uni$MolecularFeature[which(M1.uni$MRD.WarnFlag=="TRUE")]))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+
+
+```{r}
+v1 <- c("Model", paste0("Number Significant out of ", nrow(M1.uni)))
+v2 <- c("OS", length(which(M1.uni$OS.P<0.05)))
+v3 <- c("OS.adj", length(which(M1.uni$OS.P.adj<0.05)))
+v4 <- c("EFS", length(which(M1.uni$EFS.P<0.05)))
+v5 <- c("EFS.adj", length(which(M1.uni$EFS.P.adj<0.05)))
+v6 <- c("DFS", length(which(M1.uni$DFS.P<0.05)))
+v7<- c("DFS.adj", length(which(M1.uni$DFS.P.adj<0.05)))
+v8 <- c("MRD", length(which(M1.uni$MRD.P < 0.05)))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+```{r}
+# Add count and number of events
+M1.uni$N.case <- colSums(M1.classifying.driver)
+all.equal(rownames(annot), rownames(M1.classifying.driver))
+M1.uni$N.OS <- colSums(M1.classifying.driver[which(annot$OS.status==1),])
+M1.uni$N.EFS <- colSums(M1.classifying.driver[which(annot$EFS.status==1),])
+M1.uni$N.DFS <- colSums(M1.classifying.driver[which(annot$DFS.status==1),])
+M1.uni$N.MRD.Pos <- colSums(M1.classifying.driver[which(annot$Day.29.MRD>=0.1),])
+
+```
+
+
+```{r,  fig.height=11, fig.width=11}
+create_forestplot(est=M1.uni$OS.Coef, lowerci=M1.uni$OS.Lower95, upperci=M1.uni$OS.Upper95, p=M1.uni$OS.P, q=M1.uni$OS.q, MolecularFeature=paste0(M1.uni$MolecularFeatureOld, " (N=", M1.uni$N.case, ", Events=", M1.uni$N.OS, ")"), feat.name="Classifying Driver", title.name="M1 Overall Survival")
+```
+
+```{r,  fig.height=11, fig.width=11}
+create_forestplot(est=M1.uni$OS.Coef.adj, lowerci=M1.uni$OS.Lower95.adj, upperci=M1.uni$OS.Upper95.adj, p=M1.uni$OS.P.adj, q=M1.uni$OS.q.adj, MolecularFeature=paste0(M1.uni$MolecularFeatureOld, " (N=", M1.uni$N.case, ", Events=", M1.uni$N.OS, ")"), feat.name="Classifying Driver", title.name="M1 Adjusted Overall Survival")
+```
+
+
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M1.uni$EFS.Coef, lowerci=M1.uni$EFS.Lower95, upperci=M1.uni$EFS.Upper95, p=M1.uni$EFS.P, q=M1.uni$EFS.q, MolecularFeature=paste0(M1.uni$MolecularFeatureOld, " (N=", M1.uni$N.case, ", Events=", M1.uni$N.EFS, ")"), feat.name="Classifying Driver", title.name="M1 Event-free Survival")
+```
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M1.uni$EFS.Coef.adj, lowerci=M1.uni$EFS.Lower95.adj, upperci=M1.uni$EFS.Upper95.adj, p=M1.uni$EFS.P.adj, q=M1.uni$EFS.q.adj, MolecularFeature=paste0(M1.uni$MolecularFeatureOld, " (N=", M1.uni$N.case, ", Events=", M1.uni$N.EFS, ")"), feat.name="Classifying Driver", title.name="M1 Adjusted Event-free Survival")
+```
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M1.uni$DFS.Coef, lowerci=M1.uni$DFS.Lower95, upperci=M1.uni$DFS.Upper95, p=M1.uni$DFS.P, q=M1.uni$DFS.q, MolecularFeature=paste0(M1.uni$MolecularFeatureOld, " (N=", M1.uni$N.case, ", Events=", M1.uni$N.DFS, ")"), feat.name="Classifying Driver", title="M1 Disease-free Survival")
+```
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M1.uni$DFS.Coef.adj, lowerci=M1.uni$DFS.Lower95.adj, upperci=M1.uni$DFS.Upper95.adj, p=M1.uni$DFS.P.adj, q=M1.uni$DFS.q.adj, MolecularFeature=paste0(M1.uni$MolecularFeatureOld, " (N=", M1.uni$N.case, ", Events=", M1.uni$N.DFS, ")"), feat.name="Classifying Driver", title.name="M1 Adjusted Disease-free Survival")
+```
+
+
+```{r, fig.height=11, fig.width=11}
+M1.uni.MRD <- M1.uni[,c(1,2, grep("MRD", colnames(M1.uni)), grep("N.case", colnames(M1.uni)))]
+M1.uni.MRD$q <- formatC(M1.uni.MRD$MRD.q, format="e", digits=3)
+M1.uni.MRD$p <- formatC(M1.uni.MRD$MRD.P, format="e", digits=3)
+M1.uni.MRD$term <- paste0(M1.uni.MRD$MolecularFeatureOld, " (N=", M1.uni$N.case, ", Events=", M1.uni$N.MRD.Pos, ")")
+#M1.uni.MRD$q <- M1.uni.MRD$MRD.q
+M1.uni.MRD <- M1.uni.MRD[order(M1.uni.MRD$MRD.q),]
+M1.uni.MRD |> forestplot(mean=MRD.Coef, lower=MRD.Lower95, upper=MRD.Upper95, labeltext=c(term, p, q), xlab="log(OR)", title="M1 Minimal Residual Disease") |> 
+  fp_set_style(box = "royalblue",
+               line = "darkblue",
+               summary = "royalblue",
+               align = "lrrr",
+               hrz_lines = "#999999",
+               txt_gp = fpTxtGp(xlab=gpar(cex=1.2), ticks=gpar(cex=1.2))) |> 
+   fp_add_header(term="Classifying Driver", p="P-value",
+                q="q-value")
+```
+
+# M1 Classifying Driver Factor - TAL1 as reference (largest group)
+
+```{r}
+setwd(res.dir)
+M1.uni <- read_xlsx("M1_Uni_Screen_Factor_2023-06-30.xlsx")
+```
+
+```{r}
+v1 <- c("Model", paste0("Number Fail to Converge out of ", nrow(M1.uni)))
+v2 <- c("OS", length(M1.uni$MolecularFeature[which(M1.uni$OS.WarnFlag=="TRUE")]))
+v3 <- c("OS.adj", length(M1.uni$MolecularFeature[which(M1.uni$OS.WarnFlag.adj=="TRUE")]))
+v4 <- c("EFS", length(M1.uni$MolecularFeature[which(M1.uni$EFS.WarnFlag=="TRUE")]))
+v5 <- c("EFS.adj", length(M1.uni$MolecularFeature[which(M1.uni$EFS.WarnFlag.adj=="TRUE")]))
+v6 <- c("DFS", length(M1.uni$MolecularFeature[which(M1.uni$DFS.WarnFlag=="TRUE")]))
+v7<- c("DFS.adj", length(M1.uni$MolecularFeature[which(M1.uni$DFS.WarnFlag.adj=="TRUE")]))
+v8 <- c("MRD", length(M1.uni$MolecularFeature[which(M1.uni$MRD.WarnFlag=="TRUE")]))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+
+
+```{r}
+v1 <- c("Model", paste0("Number Significant out of ", nrow(M1.uni)))
+v2 <- c("OS", length(which(M1.uni$OS.P<0.05)))
+v3 <- c("OS.adj", length(which(M1.uni$OS.P.adj<0.05)))
+v4 <- c("EFS", length(which(M1.uni$EFS.P<0.05)))
+v5 <- c("EFS.adj", length(which(M1.uni$EFS.P.adj<0.05)))
+v6 <- c("DFS", length(which(M1.uni$DFS.P<0.05)))
+v7<- c("DFS.adj", length(which(M1.uni$DFS.P.adj<0.05)))
+v8 <- c("MRD", length(which(M1.uni$MRD.P < 0.05)))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+```{r}
+# Add count and number of events
+# TAL1 was reference 
+M1.driver.f <- M1.classifying.driver[,-grep("TAL1", colnames(M1.classifying.driver))]
+N.case <- colSums(M1.driver.f)
+N.OS <- colSums(M1.driver.f[which(annot$OS.status==1),])
+N.EFS <- colSums(M1.driver.f[which(annot$EFS.status==1),])
+N.DFS <- colSums(M1.driver.f[which(annot$DFS.status==1),])
+N.MRD.Pos <- colSums(M1.driver.f[which(annot$Day.29.MRD>=0.1),])
+temp.df <- cbind.data.frame(names(N.case), N.case, N.OS, N.EFS, N.DFS, N.MRD.Pos)
+colnames(temp.df)[1] <- "MolecularFeatureOld2"
+M1.uni2 <- dplyr::full_join(M1.uni, temp.df, by="MolecularFeatureOld2")
+```
+
+
+
+```{r}
+M1.uni <- M1.uni2
+```
+
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M1.uni$OS.Coef, lowerci=M1.uni$OS.Lower95, upperci=M1.uni$OS.Upper95, p=M1.uni$OS.P, q=M1.uni$OS.q, MolecularFeature=paste0(M1.uni$MolecularFeatureOld2, " (N=", M1.uni$N.case, ", Events=", M1.uni$N.OS, ")"), feat.name="Driver", title.name="M1 Overall Survival Relative to TAL1")
+```
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M1.uni$OS.Coef.adj, lowerci=M1.uni$OS.Lower95.adj, upperci=M1.uni$OS.Upper95.adj, p=M1.uni$OS.P.adj, q=M1.uni$OS.q.adj, MolecularFeature=paste0(M1.uni$MolecularFeatureOld2, " (N=", M1.uni$N.case, ", Events=", M1.uni$N.OS, ")"), feat.name="Driver", title.name="M1 Adjusted Overall Survival Relative to TAL1")
+```
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M1.uni$EFS.Coef, lowerci=M1.uni$EFS.Lower95, upperci=M1.uni$EFS.Upper95, p=M1.uni$EFS.P, q=M1.uni$EFS.q, MolecularFeature=paste0(M1.uni$MolecularFeatureOld2, " (N=", M1.uni$N.case, ", Events=", M1.uni$N.EFS, ")"), feat.name="Driver", title.name="M1 Event-free Survival Relative to TAL1")
+```
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M1.uni$EFS.Coef.adj, lowerci=M1.uni$EFS.Lower95.adj, upperci=M1.uni$EFS.Upper95.adj, p=M1.uni$EFS.P.adj, q=M1.uni$EFS.q.adj, MolecularFeature=paste0(M1.uni$MolecularFeatureOld2, " (N=", M1.uni$N.case, ", Events=", M1.uni$N.EFS, ")"), feat.name="Driver", "M1 Adjusted Event-free Survival Relative to TAL1")
+```
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M1.uni$DFS.Coef, lowerci=M1.uni$DFS.Lower95, upperci=M1.uni$DFS.Upper95, p=M1.uni$DFS.P, q=M1.uni$DFS.q, MolecularFeature=paste0(M1.uni$MolecularFeatureOld2, " (N=", M1.uni$N.case, ", Events=", M1.uni$N.DFS, ")"), feat.name="Driver", title.name="M1 Disease-free Survival Relative to TAL1")
+```
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M1.uni$DFS.Coef.adj, lowerci=M1.uni$DFS.Lower95.adj, upperci=M1.uni$DFS.Upper95.adj, p=M1.uni$DFS.P.adj, q=M1.uni$DFS.q.adj, MolecularFeature=paste0(M1.uni$MolecularFeatureOld2, " (N=", M1.uni$N.case, ", Events=", M1.uni$N.DFS, ")"), feat.name="Driver", title.name="M1 Adjusted Disease-free Survival Relative to TAL1")
+```
+
+
+
+```{r, fig.height=11, fig.width=11}
+M1.uni.MRD <- M1.uni[,c(1,3, grep("MRD", colnames(M1.uni)), grep("N.case", colnames(M1.uni)))]
+M1.uni.MRD$p <- formatC(M1.uni.MRD$MRD.P, format="e", digits=3)
+M1.uni.MRD$q <- formatC(M1.uni.MRD$MRD.q, format="e", digits=3)
+M1.uni.MRD <- M1.uni.MRD[order(M1.uni.MRD$MRD.q),]
+M1.uni.MRD$term <- paste0(M1.uni.MRD$MolecularFeatureOld2, " (N=", M1.uni$N.case, ", Events=", M1.uni$N.MRD.Pos, ")")
+M1.uni.MRD |> forestplot(mean=MRD.Coef, lower=MRD.Lower95, upper=MRD.Upper95, labeltext=c(term, p, q), xlab="log(OR)", title="M1 Minimal Residual Disease Relative to TAL1") |> 
+  fp_set_style(box = "royalblue",
+               line = "darkblue",
+               summary = "royalblue",
+               align = "lrrr",
+               hrz_lines = "#999999",
+               txt_gp = fpTxtGp(xlab=gpar(cex=1.2), ticks=gpar(cex=1.2))) |> 
+   fp_add_header(term="Driver", p="P-value",
+                q="q-value")
+```
+
+# M2 ETP Status
+
+Note that hazard ratios are relative to status = non-ETP
+
+```{r}
+setwd(res.dir)
+M2.uni <- read.csv("M2_Uni_Screen_Factor_Corrected_2023-07-13.csv")
+```
+
+```{r}
+v1 <- c("Model", paste0("Number Fail to Converge out of ", nrow(M2.uni)))
+v2 <- c("OS", length(M2.uni$MolecularFeature[which(M2.uni$OS.WarnFlag=="TRUE")]))
+v3 <- c("OS.adj", length(M2.uni$MolecularFeature[which(M2.uni$OS.WarnFlag.adj=="TRUE")]))
+v4 <- c("EFS", length(M2.uni$MolecularFeature[which(M2.uni$EFS.WarnFlag=="TRUE")]))
+v5 <- c("EFS.adj", length(M2.uni$MolecularFeature[which(M2.uni$EFS.WarnFlag.adj=="TRUE")]))
+v6 <- c("DFS", length(M2.uni$MolecularFeature[which(M2.uni$DFS.WarnFlag=="TRUE")]))
+v7<- c("DFS.adj", length(M2.uni$MolecularFeature[which(M2.uni$DFS.WarnFlag.adj=="TRUE")]))
+v8 <- c("MRD", length(M2.uni$MolecularFeature[which(M2.uni$MRD.WarnFlag=="TRUE")]))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+
+
+```{r}
+v1 <- c("Model", paste0("Number Significant out of ", nrow(M2.uni)))
+v2 <- c("OS", length(which(M2.uni$OS.P<0.05)))
+v3 <- c("OS.adj", length(which(M2.uni$OS.P.adj<0.05)))
+v4 <- c("EFS", length(which(M2.uni$EFS.P<0.05)))
+v5 <- c("EFS.adj", length(which(M2.uni$EFS.P.adj<0.05)))
+v6 <- c("DFS", length(which(M2.uni$DFS.P<0.05)))
+v7<- c("DFS.adj", length(which(M2.uni$DFS.P.adj<0.05)))
+v8 <- c("MRD", length(which(M2.uni$MRD.P < 0.05)))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+```{r}
+# Add count and number of events
+# TAL1 was reference 
+M2.ETP.f <- M2.ETP_status[,-grep("Non-ETP", colnames(M2.ETP_status))]
+N.case <- colSums(M2.ETP.f)
+N.OS <- colSums(M2.ETP.f[which(annot$OS.status==1),])
+N.EFS <- colSums(M2.ETP.f[which(annot$EFS.status==1),])
+N.DFS <- colSums(M2.ETP.f[which(annot$DFS.status==1),])
+N.MRD.Pos <- colSums(M2.ETP.f[which(annot$Day.29.MRD>=0.1),])
+temp.df <- cbind.data.frame(names(N.case), N.case, N.OS, N.EFS, N.DFS, N.MRD.Pos)
+colnames(temp.df)[1] <- "MolecularFeatureOld"
+temp.df$MolecularFeature <- c("StatusNear-ETP", "StatusETP")
+M2.uni2 <- full_join(M2.uni, temp.df, by="MolecularFeature")
+M2.uni <- M2.uni2
+```
+
+
+
+```{r}
+create_forestplot(est=M2.uni$OS.Coef, lowerci=M2.uni$OS.Lower95, upperci=M2.uni$OS.Upper95, p=M2.uni$OS.P, q=M2.uni$OS.q, MolecularFeature=paste0(M2.uni$MolecularFeatureOld, " (N=", M2.uni$N.case, ", Events=", M2.uni$N.OS, ")"), feat.name="ETP Status", title.name="M2 Overall Survival Relative to Non-ETP")
+```
+
+```{r}
+create_forestplot(est=M2.uni$OS.Coef.adj, lowerci=M2.uni$OS.Lower95.adj, upperci=M2.uni$OS.Upper95.adj, p=M2.uni$OS.P.adj, q=M2.uni$OS.q.adj, MolecularFeature=paste0(M2.uni$MolecularFeatureOld, " (N=", M2.uni$N.case, ", Events=", M2.uni$N.OS, ")"), feat.name="ETP Status", title.name = "M2 Adjusted Overall Survival Relative to Non-ETP")
+```
+
+```{r}
+create_forestplot(est=M2.uni$EFS.Coef, lowerci=M2.uni$EFS.Lower95, upperci=M2.uni$EFS.Upper95, p=M2.uni$EFS.P, q=M2.uni$EFS.q, MolecularFeature=paste0(M2.uni$MolecularFeatureOld, " (N=", M2.uni$N.case, ", Events=", M2.uni$N.EFS, ")"), feat.name="ETP Status", title.name="M2 Event-free Survival Relative to Non-ETP")
+```
+
+```{r}
+create_forestplot(est=M2.uni$EFS.Coef.adj, lowerci=M2.uni$EFS.Lower95.adj, upperci=M2.uni$EFS.Upper95.adj, p=M2.uni$EFS.P.adj, q=M2.uni$EFS.q.adj, MolecularFeature=paste0(M2.uni$MolecularFeatureOld, " (N=", M2.uni$N.case, ", Events=", M2.uni$N.EFS, ")"), feat.name="ETP Status", title.name="M2 Adjusted Event-free Survival Relative to Non-ETP")
+```
+
+```{r}
+create_forestplot(est=M2.uni$DFS.Coef, lowerci=M2.uni$DFS.Lower95, upperci=M2.uni$DFS.Upper95, p=M2.uni$DFS.P, q=M2.uni$DFS.q, MolecularFeature=paste0(M2.uni$MolecularFeatureOld, " (N=", M2.uni$N.case, ", Events=", M2.uni$N.DFS, ")"), feat.name="ETP Status", title.name="M2 Disease-free Survival Relative to Non-ETP")
+```
+
+```{r}
+create_forestplot(est=M2.uni$DFS.Coef.adj, lowerci=M2.uni$DFS.Lower95.adj, upperci=M2.uni$DFS.Upper95.adj, p=M2.uni$DFS.P.adj, q=M2.uni$DFS.q.adj, MolecularFeature=paste0(M2.uni$MolecularFeatureOld, " (N=", M2.uni$N.case, ", Events=", M2.uni$N.DFS, ")"), feat.name="ETP Status", title.name="M2 Adjusted Disease-free Survival Relative to Non-ETP")
+```
+
+```{r}
+M2.uni.MRD <- M2.uni[,c(2, grep("MolecularFeatureOld", colnames(M2.uni)), grep("MRD", colnames(M2.uni)), grep("N.case", colnames(M2.uni)))]
+M2.uni.MRD$p <- formatC(M2.uni.MRD$MRD.P, format="e", digits=3)
+M2.uni.MRD$q <- formatC(M2.uni.MRD$MRD.q, format="e", digits=3)
+M2.uni.MRD <- M2.uni.MRD[order(M2.uni.MRD$MRD.q),]
+M2.uni.MRD$term <- paste0(M2.uni.MRD$MolecularFeatureOld, " (N=", M2.uni$N.case, ", Events=", M2.uni$N.MRD.Pos, ")")
+M2.uni.MRD |> forestplot(mean=MRD.Coef, lower=MRD.Lower95, upper=MRD.Upper95, labeltext=c(term, p, q), xlab="log(OR)", title="M2 Minimal Residual Disease Relative to Non-ETP") |> 
+  fp_set_style(box = "royalblue",
+               line = "darkblue",
+               summary = "royalblue",
+               align = "lrrr",
+               hrz_lines = "#999999",
+               txt_gp = fpTxtGp(xlab=gpar(cex=1.2), ticks=gpar(cex=1.2))) |> 
+   fp_add_header(term="ETP Status", p="P-value",
+                q="q-value")
+```
+
+
+# M3 Subtype
+
+```{r}
+setwd(res.dir)
+M3.uni <- read.csv("M3_Uni_Screen_Corrected_2023-07-13.csv")
+```
+
+```{r}
+v1 <- c("Model", paste0("Number Fail to Converge out of ", nrow(M3.uni)))
+v2 <- c("OS", length(M3.uni$MolecularFeature[which(M3.uni$OS.WarnFlag=="TRUE")]))
+v3 <- c("OS.adj", length(M3.uni$MolecularFeature[which(M3.uni$OS.WarnFlag.adj=="TRUE")]))
+v4 <- c("EFS", length(M3.uni$MolecularFeature[which(M3.uni$EFS.WarnFlag=="TRUE")]))
+v5 <- c("EFS.adj", length(M3.uni$MolecularFeature[which(M3.uni$EFS.WarnFlag.adj=="TRUE")]))
+v6 <- c("DFS", length(M3.uni$MolecularFeature[which(M3.uni$DFS.WarnFlag=="TRUE")]))
+v7<- c("DFS.adj", length(M3.uni$MolecularFeature[which(M3.uni$DFS.WarnFlag.adj=="TRUE")]))
+v8 <- c("MRD", length(M3.uni$MolecularFeature[which(M3.uni$MRD.WarnFlag=="TRUE")]))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+
+
+```{r}
+v1 <- c("Model", paste0("Number Significant out of ", nrow(M3.uni)))
+v2 <- c("OS", length(which(M3.uni$OS.P<0.05)))
+v3 <- c("OS.adj", length(which(M3.uni$OS.P.adj<0.05)))
+v4 <- c("EFS", length(which(M3.uni$EFS.P<0.05)))
+v5 <- c("EFS.adj", length(which(M3.uni$EFS.P.adj<0.05)))
+v6 <- c("DFS", length(which(M3.uni$DFS.P<0.05)))
+v7<- c("DFS.adj", length(which(M3.uni$DFS.P.adj<0.05)))
+v8 <- c("MRD", length(which(M3.uni$MRD.P < 0.05)))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+
+```{r}
+# Add count and number of events
+M3.uni$N.case <- colSums(M3.subtype)
+all.equal(rownames(annot), rownames(M3.subtype))
+M3.uni$N.OS <- colSums(M3.subtype[which(annot$OS.status==1),])
+M3.uni$N.EFS <- colSums(M3.subtype[which(annot$EFS.status==1),])
+M3.uni$N.DFS <- colSums(M3.subtype[which(annot$DFS.status==1),])
+M3.uni$N.MRD.Pos <- colSums(M3.subtype[which(annot$Day.29.MRD>=0.1),])
+```
+
+```{r}
+create_forestplot(est=M3.uni$OS.Coef, lowerci=M3.uni$OS.Lower95, upperci=M3.uni$OS.Upper95, p=M3.uni$OS.P, q=M3.uni$OS.q, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.OS, ")"), feat.name="Subtype", title.name="M3 Overall Survival")
+```
+
+```{r}
+create_forestplot(est=M3.uni$OS.Coef.adj, lowerci=M3.uni$OS.Lower95.adj, upperci=M3.uni$OS.Upper95.adj, p=M3.uni$OS.P.adj, q=M3.uni$OS.q.adj, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.OS, ")"), feat.name="Subtype", title.name="M3 Adjusted Overall Survival")
+```
+
+```{r}
+create_forestplot(est=M3.uni$EFS.Coef, lowerci=M3.uni$EFS.Lower95, upperci=M3.uni$EFS.Upper95, p=M3.uni$EFS.P, q=M3.uni$EFS.q, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.EFS, ")"), feat.name="Subtype", title.name="M3 Event-free Survival")
+```
+
+```{r}
+create_forestplot(est=M3.uni$EFS.Coef.adj, lowerci=M3.uni$EFS.Lower95.adj, upperci=M3.uni$EFS.Upper95.adj, p=M3.uni$EFS.P.adj, q=M3.uni$EFS.q.adj, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.EFS, ")"), feat.name="Subtype", "M3 Adjusted Event-free Survival")
+```
+
+```{r}
+create_forestplot(est=M3.uni$DFS.Coef, lowerci=M3.uni$DFS.Lower95, upperci=M3.uni$DFS.Upper95, p=M3.uni$DFS.P, q=M3.uni$DFS.q, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.DFS, ")"), feat.name="Subtype", title.name="M3 Disease-free Survival")
+```
+
+```{r}
+create_forestplot(est=M3.uni$DFS.Coef.adj, lowerci=M3.uni$DFS.Lower95.adj, upperci=M3.uni$DFS.Upper95.adj, p=M3.uni$DFS.P.adj, q=M3.uni$DFS.q.adj, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.DFS, ")"), feat.name="Subtype", title.name="M3 Adjusted Disease-free Survival")
+```
+
+```{r, fig.height=11, fig.width=11}
+M3.uni.MRD <- M3.uni[,c(2,3, grep("MRD", colnames(M3.uni)), grep("N.case", colnames(M3.uni)))]
+M3.uni.MRD$q <- formatC(M3.uni.MRD$MRD.q, format="e", digits=3)
+M3.uni.MRD$p <- formatC(M3.uni.MRD$MRD.P, format="e", digits=3)
+M3.uni.MRD$term <- paste0(M3.uni.MRD$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.MRD.Pos, ")")
+#M3.uni.MRD$q <- M3.uni.MRD$MRD.q
+M3.uni.MRD <- M3.uni.MRD[order(M3.uni.MRD$MRD.q),]
+M3.uni.MRD |> forestplot(mean=MRD.Coef, lower=MRD.Lower95, upper=MRD.Upper95, labeltext=c(term, p, q), xlab="log(OR)", title="M3 Minimal Residual Disease") |> 
+  fp_set_style(box = "royalblue",
+               line = "darkblue",
+               summary = "royalblue",
+               align = "lrrr",
+               hrz_lines = "#999999",
+               txt_gp = fpTxtGp(xlab=gpar(cex=1.2), ticks=gpar(cex=1.2))) |> 
+   fp_add_header(term="Subtype", p="P-value",
+                q="q-value")
+```
+
+
+
+# M3 Subtype Factor - TAL1 DP-like as reference (largest group)
+
+```{r}
+setwd(res.dir)
+M3.uni <- read_xlsx("M3_Uni_Screen_Factor_2023-06-30.xlsx")
+```
+
+```{r}
+v1 <- c("Model", paste0("Number Fail to Converge out of ", nrow(M3.uni)))
+v2 <- c("OS", length(M3.uni$MolecularFeature[which(M3.uni$OS.WarnFlag=="TRUE")]))
+v3 <- c("OS.adj", length(M3.uni$MolecularFeature[which(M3.uni$OS.WarnFlag.adj=="TRUE")]))
+v4 <- c("EFS", length(M3.uni$MolecularFeature[which(M3.uni$EFS.WarnFlag=="TRUE")]))
+v5 <- c("EFS.adj", length(M3.uni$MolecularFeature[which(M3.uni$EFS.WarnFlag.adj=="TRUE")]))
+v6 <- c("DFS", length(M3.uni$MolecularFeature[which(M3.uni$DFS.WarnFlag=="TRUE")]))
+v7<- c("DFS.adj", length(M3.uni$MolecularFeature[which(M3.uni$DFS.WarnFlag.adj=="TRUE")]))
+v8 <- c("MRD", length(M3.uni$MolecularFeature[which(M3.uni$MRD.WarnFlag=="TRUE")]))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+
+
+```{r}
+v1 <- c("Model", paste0("Number Significant out of ", nrow(M3.uni)))
+v2 <- c("OS", length(which(M3.uni$OS.q<0.1)))
+v3 <- c("OS.adj", length(which(M3.uni$OS.q.adj<0.1)))
+v4 <- c("EFS", length(which(M3.uni$EFS.q<0.1)))
+v5 <- c("EFS.adj", length(which(M3.uni$EFS.q.adj<0.1)))
+v6 <- c("DFS", length(which(M3.uni$DFS.q<0.1)))
+v7<- c("DFS.adj", length(which(M3.uni$DFS.q.adj<0.1)))
+v8 <- c("MRD", length(which(M3.uni$MRD.q < 0.1)))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+```{r}
+# Add count and number of events
+# TAL1 was reference 
+M3.subtype.f <- M3.subtype[,-grep("TAL1 DP-like", colnames(M3.subtype))]
+N.case <- colSums(M3.subtype.f)
+N.OS <- colSums(M3.subtype.f[which(annot$OS.status==1),])
+N.EFS <- colSums(M3.subtype.f[which(annot$EFS.status==1),])
+N.DFS <- colSums(M3.subtype.f[which(annot$DFS.status==1),])
+N.MRD.Pos <- colSums(M3.subtype.f[which(annot$Day.29.MRD>=0.1),])
+temp.df <- cbind.data.frame(names(N.case), N.case, N.OS, N.EFS, N.DFS, N.MRD.Pos)
+colnames(temp.df)[1] <- "MolecularFeatureOld"
+M3.uni2 <- full_join(M3.uni, temp.df, by="MolecularFeatureOld")
+M3.uni <- M3.uni2
+```
+
+```{r}
+create_forestplot(est=M3.uni$OS.Coef, lowerci=M3.uni$OS.Lower95, upperci=M3.uni$OS.Upper95, q=M3.uni$OS.q, p=M3.uni$OS.P, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.OS, ")"), feat.name="Subtype", title.name="M3 Overall Survival Relative to TAL1 DP-like")
+```
+
+```{r}
+create_forestplot(est=M3.uni$OS.Coef.adj, lowerci=M3.uni$OS.Lower95.adj, upperci=M3.uni$OS.Upper95.adj, p=M3.uni$OS.P.adj, q=M3.uni$OS.q.adj, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.OS, ")"), feat.name="Subtype", title.name="M3 Adjusted Overall Survival Relative to TAL1 DP-like")
+```
+
+```{r}
+create_forestplot(est=M3.uni$EFS.Coef, lowerci=M3.uni$EFS.Lower95, upperci=M3.uni$EFS.Upper95, p=M3.uni$EFS.P, q=M3.uni$EFS.q, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.EFS, ")"), feat.name="Subtype", title.name="M3 Event-free Survival Relative to TAL1 DP-Like")
+```
+
+```{r}
+create_forestplot(est=M3.uni$EFS.Coef.adj, lowerci=M3.uni$EFS.Lower95.adj, upperci=M3.uni$EFS.Upper95.adj, p=M3.uni$EFS.P.adj, q=M3.uni$EFS.q.adj, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.EFS, ")"), feat.name="Subtype", "M3 Adjusted Event-free Survival Relative to TAL1 DP-Like")
+```
+
+```{r}
+create_forestplot(est=M3.uni$DFS.Coef, lowerci=M3.uni$DFS.Lower95, upperci=M3.uni$DFS.Upper95, p=M3.uni$DFS.P, q=M3.uni$DFS.q, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.DFS, ")"), feat.name="Subtype", title.name="M3 Disease-free Survival Relative to TAL1 DP-like")
+```
+
+```{r}
+create_forestplot(est=M3.uni$DFS.Coef.adj, lowerci=M3.uni$DFS.Lower95.adj, upperci=M3.uni$DFS.Upper95.adj, p=M3.uni$DFS.P.adj, q=M3.uni$DFS.q.adj, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.DFS, ")"), feat.name="Subtype", title.name="M3 Adjusted Disease-free Survival Relative to TAL1 DP-like")
+```
+
+
+
+
+```{r, fig.height=11, fig.width=11}
+M3.uni.MRD <- M3.uni[,c(1,2, grep("MRD", colnames(M3.uni)), grep("N.case", colnames(M3.uni)))]
+M3.uni.MRD$p <- formatC(M3.uni.MRD$MRD.P, format="e", digits=3)
+M3.uni.MRD$q <- formatC(M3.uni.MRD$MRD.q, format="e", digits=3)
+M3.uni.MRD <- M3.uni.MRD[order(M3.uni.MRD$MRD.q),]
+M3.uni.MRD$term <- paste0(M3.uni.MRD$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.MRD.Pos, ")")
+M3.uni.MRD |> forestplot(mean=MRD.Coef, lower=MRD.Lower95, upper=MRD.Upper95, labeltext=c(term, p, q), xlab="log(OR)", title="M3 Minimal Residual Disease Relative to TAL1 DP-like") |> 
+  fp_set_style(box = "royalblue",
+               line = "darkblue",
+               summary = "royalblue",
+               align = "lrrr",
+               hrz_lines = "#999999",
+               txt_gp = fpTxtGp(xlab=gpar(cex=1.2), ticks=gpar(cex=1.2))) |> 
+   fp_add_header(term="Subtype", p="P-value",
+                q="q-value")
+```
+
+# M3 Subsubtype
+
+```{r}
+setwd(res.dir)
+M3.uni <- read_xlsx("M3_subsubtype_Uni_Screen_2023-06-30.xlsx")
+```
+
+```{r}
+v1 <- c("Model", paste0("Number Fail to Converge out of ", nrow(M3.uni)))
+v2 <- c("OS", length(M3.uni$MolecularFeature[which(M3.uni$OS.WarnFlag=="TRUE")]))
+v3 <- c("OS.adj", length(M3.uni$MolecularFeature[which(M3.uni$OS.WarnFlag.adj=="TRUE")]))
+v4 <- c("EFS", length(M3.uni$MolecularFeature[which(M3.uni$EFS.WarnFlag=="TRUE")]))
+v5 <- c("EFS.adj", length(M3.uni$MolecularFeature[which(M3.uni$EFS.WarnFlag.adj=="TRUE")]))
+v6 <- c("DFS", length(M3.uni$MolecularFeature[which(M3.uni$DFS.WarnFlag=="TRUE")]))
+v7<- c("DFS.adj", length(M3.uni$MolecularFeature[which(M3.uni$DFS.WarnFlag.adj=="TRUE")]))
+v8 <- c("MRD", length(M3.uni$MolecularFeature[which(M3.uni$MRD.WarnFlag=="TRUE")]))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+
+
+```{r}
+v1 <- c("Model", paste0("Number Significant out of ", nrow(M3.uni)))
+v2 <- c("OS", length(which(M3.uni$OS.P<0.05)))
+v3 <- c("OS.adj", length(which(M3.uni$OS.P.adj<0.05)))
+v4 <- c("EFS", length(which(M3.uni$EFS.P<0.05)))
+v5 <- c("EFS.adj", length(which(M3.uni$EFS.P.adj<0.05)))
+v6 <- c("DFS", length(which(M3.uni$DFS.P<0.05)))
+v7<- c("DFS.adj", length(which(M3.uni$DFS.P.adj<0.05)))
+v8 <- c("MRD", length(which(M3.uni$MRD.P < 0.05)))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+```{r}
+# Add count and number of events
+M3.uni$N.case <- colSums(M3.subsubtype)
+all.equal(rownames(annot), rownames(M3.subsubtype))
+M3.uni$N.OS <- colSums(M3.subsubtype[which(annot$OS.status==1),])
+M3.uni$N.EFS <- colSums(M3.subsubtype[which(annot$EFS.status==1),])
+M3.uni$N.DFS <- colSums(M3.subsubtype[which(annot$DFS.status==1),])
+M3.uni$N.MRD.Pos <- colSums(M3.subsubtype[which(annot$Day.29.MRD>=0.1),])
+```
+
+```{r}
+create_forestplot(est=M3.uni$OS.Coef, lowerci=M3.uni$OS.Lower95, upperci=M3.uni$OS.Upper95, p=M3.uni$OS.P, q=M3.uni$OS.q, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.OS, ")"), feat.name="Subsubtype", title.name="M3 Overall Survival")
+```
+
+```{r}
+create_forestplot(est=M3.uni$OS.Coef.adj, lowerci=M3.uni$OS.Lower95.adj, upperci=M3.uni$OS.Upper95.adj, p=M3.uni$OS.P.adj, q=M3.uni$OS.q.adj, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.OS, ")"), feat.name="Subsubtype", title.name="M3 Adjusted Overall Survival")
+```
+
+```{r}
+create_forestplot(est=M3.uni$EFS.Coef, lowerci=M3.uni$EFS.Lower95, upperci=M3.uni$EFS.Upper95, p=M3.uni$EFS.P.adj, q=M3.uni$EFS.q, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.EFS, ")"), feat.name="Subsubtype", title.name="M3 Event-free Survival")
+```
+
+```{r}
+create_forestplot(est=M3.uni$EFS.Coef.adj, lowerci=M3.uni$EFS.Lower95.adj, upperci=M3.uni$EFS.Upper95.adj, p=M3.uni$EFS.P, q=M3.uni$EFS.q.adj, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.EFS, ")"), feat.name="Subsubtype", "M3 Adjusted Event-free Survival")
+```
+
+```{r}
+create_forestplot(est=M3.uni$DFS.Coef, lowerci=M3.uni$DFS.Lower95, upperci=M3.uni$DFS.Upper95, p=M3.uni$DFS.P, q=M3.uni$DFS.q, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.DFS, ")"), feat.name="Subsubtype", title.name="M3 Disease-free Survival")
+```
+
+```{r}
+create_forestplot(est=M3.uni$DFS.Coef.adj, lowerci=M3.uni$DFS.Lower95.adj, upperci=M3.uni$DFS.Upper95.adj, p=M3.uni$DFS.P.adj, q=M3.uni$DFS.q.adj, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.DFS, ")"), feat.name="Subsubtype", title.name="M3 Adjusted Disease-free Survival")
+```
+
+```{r}
+M3.uni.MRD <- M3.uni[,c(1,2, grep("MRD", colnames(M3.uni)), grep("N.case", colnames(M3.uni)))]
+M3.uni.MRD$q <- formatC(M3.uni.MRD$MRD.q, format="e", digits=3)
+M3.uni.MRD$p <- formatC(M3.uni.MRD$MRD.P, format="e", digits=3)
+M3.uni.MRD$term <- paste0(M3.uni.MRD$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.MRD.Pos, ")")
+#M3.uni.MRD$q <- M3.uni.MRD$MRD.q
+M3.uni.MRD <- M3.uni.MRD[order(M3.uni.MRD$MRD.q),]
+M3.uni.MRD |> forestplot(mean=MRD.Coef, lower=MRD.Lower95, upper=MRD.Upper95, labeltext=c(term, p, q), xlab="log(OR)", title="M3 Minimal Residual Disease") |> 
+  fp_set_style(box = "royalblue",
+               line = "darkblue",
+               summary = "royalblue",
+               align = "lrrr",
+               hrz_lines = "#999999",
+               txt_gp = fpTxtGp(xlab=gpar(cex=1.2), ticks=gpar(cex=1.2))) |> 
+   fp_add_header(term="Subsubtype", p="P-value",
+                q="q-value")
+```
+
+
+# M3 Genetic Subtype
+
+```{r}
+setwd(res.dir)
+M3.uni <- read.csv("M3_genetic_Uni_Screen_Corrected_2023-07-13.csv")
+```
+
+```{r}
+v1 <- c("Model", paste0("Number Fail to Converge out of ", nrow(M3.uni)))
+v2 <- c("OS", length(M3.uni$MolecularFeature[which(M3.uni$OS.WarnFlag=="TRUE")]))
+v3 <- c("OS.adj", length(M3.uni$MolecularFeature[which(M3.uni$OS.WarnFlag.adj=="TRUE")]))
+v4 <- c("EFS", length(M3.uni$MolecularFeature[which(M3.uni$EFS.WarnFlag=="TRUE")]))
+v5 <- c("EFS.adj", length(M3.uni$MolecularFeature[which(M3.uni$EFS.WarnFlag.adj=="TRUE")]))
+v6 <- c("DFS", length(M3.uni$MolecularFeature[which(M3.uni$DFS.WarnFlag=="TRUE")]))
+v7<- c("DFS.adj", length(M3.uni$MolecularFeature[which(M3.uni$DFS.WarnFlag.adj=="TRUE")]))
+v8 <- c("MRD", length(M3.uni$MolecularFeature[which(M3.uni$MRD.WarnFlag=="TRUE")]))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+
+
+```{r}
+v1 <- c("Model", paste0("Number Significant out of ", nrow(M3.uni)))
+v2 <- c("OS", length(which(M3.uni$OS.P<0.05)))
+v3 <- c("OS.adj", length(which(M3.uni$OS.P.adj<0.05)))
+v4 <- c("EFS", length(which(M3.uni$EFS.P<0.05)))
+v5 <- c("EFS.adj", length(which(M3.uni$EFS.P.adj<0.05)))
+v6 <- c("DFS", length(which(M3.uni$DFS.P<0.05)))
+v7<- c("DFS.adj", length(which(M3.uni$DFS.P.adj<0.05)))
+v8 <- c("MRD", length(which(M3.uni$MRD.P < 0.05)))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+```{r}
+# Add count and number of events
+M3.uni$N.case <- colSums(M3.genetic.subtype)
+all.equal(rownames(annot), rownames(M3.genetic.subtype))
+M3.uni$N.OS <- colSums(M3.genetic.subtype[which(annot$OS.status==1),])
+M3.uni$N.EFS <- colSums(M3.genetic.subtype[which(annot$EFS.status==1),])
+M3.uni$N.DFS <- colSums(M3.genetic.subtype[which(annot$DFS.status==1),])
+M3.uni$N.MRD.Pos <- colSums(M3.genetic.subtype[which(annot$Day.29.MRD>=0.1),])
+```
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M3.uni$OS.Coef, lowerci=M3.uni$OS.Lower95, upperci=M3.uni$OS.Upper95, p=M3.uni$OS.P, q=M3.uni$OS.q, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.OS, ")"), feat.name="Genetic Subtype", title.name="M3 Overall Survival")
+```
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M3.uni$OS.Coef.adj, lowerci=M3.uni$OS.Lower95.adj, upperci=M3.uni$OS.Upper95.adj, p=M3.uni$OS.P.adj, q=M3.uni$OS.q.adj, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.OS, ")"), feat.name="Genetic Subtype", title.name="M3 Adjusted Overall Survival")
+```
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M3.uni$EFS.Coef, lowerci=M3.uni$EFS.Lower95, upperci=M3.uni$EFS.Upper95, p=M3.uni$EFS.P, q=M3.uni$EFS.q, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.EFS, ")"), feat.name="Genetic Subtype", title.name="M3 Event-free Survival")
+```
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M3.uni$EFS.Coef.adj, lowerci=M3.uni$EFS.Lower95.adj, upperci=M3.uni$EFS.Upper95.adj, p=M3.uni$EFS.P.adj, q=M3.uni$EFS.q.adj, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.EFS, ")"), feat.name="Genetic Subtype", "M3 Adjusted Event-free Survival")
+```
+
+```{r, fig.height=11, fig.width-11}
+create_forestplot(est=M3.uni$DFS.Coef, lowerci=M3.uni$DFS.Lower95, upperci=M3.uni$DFS.Upper95, p=M3.uni$DFS.P, q=M3.uni$DFS.q, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.DFS, ")"), feat.name="Genetic Subtype", title.name="M3 Disease-free Survival")
+```
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M3.uni$DFS.Coef.adj, lowerci=M3.uni$DFS.Lower95.adj, upperci=M3.uni$DFS.Upper95.adj, p=M3.uni$DFS.P.adj, q=M3.uni$DFS.q.adj, MolecularFeature=paste0(M3.uni$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.DFS, ")"), feat.name="Subtype", title.name="M3 Adjusted Disease-free Survival")
+```
+
+
+
+
+```{r, fig.height=11, fig.width=11}
+M3.uni.MRD <- M3.uni[,c(2,3, grep("MRD", colnames(M3.uni)), grep("N.case", colnames(M3.uni)))]
+M3.uni.MRD$q <- formatC(M3.uni.MRD$MRD.q, format="e", digits=3)
+M3.uni.MRD$p <- formatC(M3.uni.MRD$MRD.P, format="e", digits=3)
+M3.uni.MRD$term <- paste0(M3.uni.MRD$MolecularFeatureOld, " (N=", M3.uni$N.case, ", Events=", M3.uni$N.MRD.Pos, ")")
+#M3.uni.MRD$q <- M3.uni.MRD$MRD.q
+M3.uni.MRD <- M3.uni.MRD[order(M3.uni.MRD$MRD.q),]
+M3.uni.MRD |> forestplot(mean=MRD.Coef, lower=MRD.Lower95, upper=MRD.Upper95, labeltext=c(term, p, q), xlab="log(OR)", title="M3 Minimal Residual Disease") |> 
+  fp_set_style(box = "royalblue",
+               line = "darkblue",
+               summary = "royalblue",
+               align = "lrrr",
+               hrz_lines = "#999999",
+               txt_gp = fpTxtGp(xlab=gpar(cex=1.2), ticks=gpar(cex=1.2))) |> 
+   fp_add_header(term="Genetic Subtype", p="P-value",
+                q="q-value")
+```
+
+# M4 Pathway
+
+
+```{r}
+setwd(res.dir)
+M4.uni <- read.csv("M4_Uni_Screen_Corrected_2023-07-13.csv")
+```
+
+```{r}
+v1 <- c("Model", paste0("Number Fail to Converge out of ", nrow(M4.uni)))
+v2 <- c("OS", length(M4.uni$MolecularFeature[which(M4.uni$OS.WarnFlag=="TRUE")]))
+v3 <- c("OS.adj", length(M4.uni$MolecularFeature[which(M4.uni$OS.WarnFlag.adj=="TRUE")]))
+v4 <- c("EFS", length(M4.uni$MolecularFeature[which(M4.uni$EFS.WarnFlag=="TRUE")]))
+v5 <- c("EFS.adj", length(M4.uni$MolecularFeature[which(M4.uni$EFS.WarnFlag.adj=="TRUE")]))
+v6 <- c("DFS", length(M4.uni$MolecularFeature[which(M4.uni$DFS.WarnFlag=="TRUE")]))
+v7<- c("DFS.adj", length(M4.uni$MolecularFeature[which(M4.uni$DFS.WarnFlag.adj=="TRUE")]))
+v8 <- c("MRD", length(M4.uni$MolecularFeature[which(M4.uni$MRD.WarnFlag=="TRUE")]))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+
+```{r, echo=FALSE}
+v1 <- c("Model", paste0("Number Significant out of ", nrow(M4.uni)))
+v2 <- c("OS", length(which(M4.uni$OS.q<0.1)))
+v3 <- c("OS.adj", length(which(M4.uni$OS.q.adj<0.1)))
+v4 <- c("EFS", length(which(M4.uni$EFS.q<0.1)))
+v5 <- c("EFS.adj", length(which(M4.uni$EFS.q.adj<0.1)))
+v6 <- c("DFS", length(which(M4.uni$DFS.q<0.1)))
+v7<- c("DFS.adj", length(which(M4.uni$DFS.q.adj<0.1)))
+v8 <- c("MRD", length(which(M4.uni$MRD.q < 0.1)))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+```{r}
+# Add count and number of events
+M4.uni$N.case <- colSums(M4.pathway)
+all.equal(rownames(annot), rownames(M4.pathway))
+M4.uni$N.OS <- colSums(M4.pathway[which(annot$OS.status==1),])
+M4.uni$N.EFS <- colSums(M4.pathway[which(annot$EFS.status==1),])
+M4.uni$N.DFS <- colSums(M4.pathway[which(annot$DFS.status==1),])
+M4.uni$N.MRD.Pos <- colSums(M4.pathway[which(annot$Day.29.MRD>=0.1),])
+```
+
+```{r,  fig.height=11, fig.width=11}
+create_forestplot(est=M4.uni$OS.Coef, lowerci=M4.uni$OS.Lower95, upperci=M4.uni$OS.Upper95, p=M4.uni$OS.P, q=M4.uni$OS.q, MolecularFeature=paste0(M4.uni$MolecularFeatureOld, " (N=", M4.uni$N.case, ", Events=", M4.uni$N.OS, ")"), feat.name="Pathway", title.name="M4 Overall Survival")
+```
+
+
+```{r,  fig.height=11, fig.width=11}
+create_forestplot(est=M4.uni$OS.Coef.adj, lowerci=M4.uni$OS.Lower95.adj, upperci=M4.uni$OS.Upper95.adj, p=M4.uni$OS.P.adj, q=M4.uni$OS.q.adj, MolecularFeature=paste0(M4.uni$MolecularFeatureOld, " (N=", M4.uni$N.case, ", Events=", M4.uni$N.OS, ")"), feat.name="Pathway", title.name="M4 Adjusted Overall Survival")
+```
+
+
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M4.uni$EFS.Coef, lowerci=M4.uni$EFS.Lower95, upperci=M4.uni$EFS.Upper95, p=M4.uni$EFS.P, q=M4.uni$EFS.q, MolecularFeature=paste0(M4.uni$MolecularFeatureOld, " (N=", M4.uni$N.case, ", Events=", M4.uni$N.EFS, ")"), feat.name="Pathway", title.name="M4 Event-free Survival")
+```
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M4.uni$EFS.Coef.adj, lowerci=M4.uni$EFS.Lower95.adj, upperci=M4.uni$EFS.Upper95.adj, p=M4.uni$EFS.P.adj, q=M4.uni$EFS.q.adj, MolecularFeature=paste0(M4.uni$MolecularFeatureOld, " (N=", M4.uni$N.case, ", Events=", M4.uni$N.EFS, ")"), feat.name="Pathway", title.name="M4 Adjusted Event-free Survival")
+```
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M4.uni$DFS.Coef, lowerci=M4.uni$DFS.Lower95, upperci=M4.uni$DFS.Upper95, p=M4.uni$DFS.P, q=M4.uni$DFS.q, MolecularFeature=paste0(M4.uni$MolecularFeatureOld, " (N=", M4.uni$N.case, ", Events=", M4.uni$N.DFS, ")"), feat.name="Pathway", title="M4 Disease-free Survival")
+```
+
+```{r, fig.height=11, fig.width=11}
+create_forestplot(est=M4.uni$DFS.Coef.adj, lowerci=M4.uni$DFS.Lower95.adj, upperci=M4.uni$DFS.Upper95.adj, p=M4.uni$DFS.P.adj, q=M4.uni$DFS.q.adj, MolecularFeature=paste0(M4.uni$MolecularFeatureOld, " (N=", M4.uni$N.case, ", Events=", M4.uni$N.DFS, ")"), feat.name="Pathway", title.name="M4 Adjusted Disease-free Survival")
+```
+
+
+```{r, fig.height=11, fig.width=11}
+M4.uni.MRD <- M4.uni[,c(1,2, grep("MRD", colnames(M4.uni)), grep("N.case", colnames(M4.uni)))]
+M4.uni.MRD$q <- formatC(M4.uni.MRD$MRD.q, format="e", digits=3)
+M4.uni.MRD$p <- formatC(M4.uni.MRD$MRD.P, format="e", digits=3)
+M4.uni.MRD$term <- paste0(M4.uni.MRD$MolecularFeatureOld, " (N=", M4.uni$N.case, ", Events=", M4.uni$N.MRD.Pos, ")")
+#M4.uni.MRD$q <- M4.uni.MRD$MRD.q
+M4.uni.MRD <- M4.uni.MRD[order(M4.uni.MRD$MRD.q),]
+M4.uni.MRD |> forestplot(mean=MRD.Coef, lower=MRD.Lower95, upper=MRD.Upper95, labeltext=c(term, p, q), xlab="log(OR)", title="M4 Minimal Residual Disease") |> 
+  fp_set_style(box = "royalblue",
+               line = "darkblue",
+               summary = "royalblue",
+               align = "lrrr",
+               hrz_lines = "#999999",
+               txt_gp = fpTxtGp(xlab=gpar(cex=1.2), ticks=gpar(cex=1.2))) |> 
+   fp_add_header(term="Pathway", p="P-value",
+                q="q-value")
+```
+
+
+
+
+# M5 Gene
+
+Because there are 213 genes in the dataset, we only showed the top 20 genes with smallest q-value in each of the forest plots below. 
+
+```{r}
+setwd(res.dir)
+M5.uni <- read.csv("M5_gt_Uni_Screen_2023-07-11.csv")
+M5.uni <- M5.uni[,-1]
+```
+
+
+
+```{r, echo=FALSE}
+v1 <- c("Model", paste0("Number Significant out of ", nrow(M5.uni)))
+v2 <- c("OS", length(which(M5.uni$OS.P<0.05)))
+v3 <- c("OS.adj", length(which(M5.uni$OS.P.adj<0.05)))
+v4 <- c("EFS", length(which(M5.uni$EFS.P<0.05)))
+v5 <- c("EFS.adj", length(which(M5.uni$EFS.P.adj<0.05)))
+v6 <- c("DFS", length(which(M5.uni$DFS.P<0.05)))
+v7<- c("DFS.adj", length(which(M5.uni$DFS.P.adj<0.05)))
+v8 <- c("MRD", length(which(M5.uni$MRD.P < 0.05)))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+
+
+```{r}
+M5.uni.OS <- M5.uni[order(M5.uni$OS.P),]
+M5.uni.OS$OSLogP <- -log10(M5.uni.OS$OS.P)
+M5.uni.OS2 <- M5.uni.OS[1:20,]
+library(forcats)
+df_means = M5.uni.OS2 %>%
+  group_by(Original) %>%
+  summarize(value = mean(OSLogP))
+df_means %>%
+  ggplot(aes(x = fct_reorder(Original, value), y = value)) +
+  geom_col() +
+  labs(x = "Gene", y="-log10P") + coord_flip()+theme_bw()+ggtitle("M5 Global Test Overall Survival")
+```
+
+```{r}
+M5.uni.OS <- M5.uni[order(M5.uni$OS.P.adj),]
+M5.uni.OS$OSLogP <- -log10(M5.uni.OS$OS.P.adj)
+M5.uni.OS2 <- M5.uni.OS[1:20,]
+library(forcats)
+df_means = M5.uni.OS2 %>%
+  group_by(Original) %>%
+  summarize(value = mean(OSLogP))
+df_means %>%
+  ggplot(aes(x = fct_reorder(Original, value), y = value)) +
+  geom_col() +
+  labs(x = "Gene", y="-log10P") + coord_flip()+theme_bw()+ggtitle("M5 Global Test Adjusted Overall Survival")
+```
+
+
+```{r}
+M5.uni.EFS <- M5.uni[order(M5.uni$EFS.P),]
+M5.uni.EFS$EFSLogP <- -log10(M5.uni.EFS$EFS.P)
+M5.uni.EFS2 <- M5.uni.EFS[1:20,]
+library(forcats)
+df_means = M5.uni.EFS2 %>%
+  group_by(Original) %>%
+  summarize(value = mean(EFSLogP))
+df_means %>%
+  ggplot(aes(x = fct_reorder(Original, value), y = value)) +
+  geom_col() +
+  labs(x = "Gene", y="-log10P") + coord_flip()+theme_bw()+ggtitle("M5 Global Test Event-Free Survival")
+```
+
+```{r}
+M5.uni.EFS <- M5.uni[order(M5.uni$EFS.P.adj),]
+M5.uni.EFS$EFSLogP <- -log10(M5.uni.EFS$EFS.P.adj)
+M5.uni.EFS2 <- M5.uni.EFS[1:20,]
+library(forcats)
+df_means = M5.uni.EFS2 %>%
+  group_by(Original) %>%
+  summarize(value = mean(EFSLogP))
+df_means %>%
+  ggplot(aes(x = fct_reorder(Original, value), y = value)) +
+  geom_col() +
+  labs(x = "Gene", y="-log10P") + coord_flip()+theme_bw()+ggtitle("M5 Global Test Adjusted Event-Free Survival")
+```
+
+
+```{r}
+M5.uni.DFS <- M5.uni[order(M5.uni$DFS.P),]
+M5.uni.DFS$DFSLogP <- -log10(M5.uni.DFS$DFS.P)
+M5.uni.DFS2 <- M5.uni.DFS[1:20,]
+library(forcats)
+df_means = M5.uni.DFS2 %>%
+  group_by(Original) %>%
+  summarize(value = mean(DFSLogP))
+df_means %>%
+  ggplot(aes(x = fct_reorder(Original, value), y = value)) +
+  geom_col() +
+  labs(x = "Gene", y="-log10P") + coord_flip()+theme_bw()+ggtitle("M5 Global Test Disease-Free Survival")
+```
+
+```{r}
+M5.uni.DFS <- M5.uni[order(M5.uni$DFS.P.adj),]
+M5.uni.DFS$DFSLogP <- -log10(M5.uni.DFS$DFS.P.adj)
+M5.uni.DFS2 <- M5.uni.DFS[1:20,]
+library(forcats)
+df_means = M5.uni.DFS2 %>%
+  group_by(Original) %>%
+  summarize(value = mean(DFSLogP))
+df_means %>%
+  ggplot(aes(x = fct_reorder(Original, value), y = value)) +
+  geom_col() +
+  labs(x = "Gene", y="-log10P") + coord_flip()+theme_bw()+ggtitle("M5 Global Test Adjusted Disease-Free Survival")
+```
+
+```{r}
+M5.uni.MRD <- M5.uni[order(M5.uni$MRD.P),]
+M5.uni.MRD$MRDLogP <- -log10(M5.uni.MRD$MRD.P)
+M5.uni.MRD2 <- M5.uni.MRD[1:20,]
+library(forcats)
+df_means = M5.uni.MRD2 %>%
+  group_by(Original) %>%
+  summarize(value = mean(MRDLogP))
+df_means %>%
+  ggplot(aes(x = fct_reorder(Original, value), y = value)) +
+  geom_col() +
+  labs(x = "Gene", y="-log10P") + coord_flip()+theme_bw()+ggtitle("M5 Global Test Minimal Residual Disease")
+```
+
+
+# M5 Variant
+
+We only fit coxphf/logistf for variants of genes that had p<0.1 in the global test. Because there are a large number of variants in the dataset, we only showed the top 20 variants with smallest q-value in each of the forest plots below. 
+
+```{r}
+setwd(res.dir)
+M5.uniOS <- read_xlsx("M5GlobalTestAndVariantScreenP_2023-07-13.xlsx", sheet="OS")
+M5.uniEFS <- read_xlsx("M5GlobalTestAndVariantScreenP_2023-07-13.xlsx", sheet="EFS")
+M5.uniDFS <- read_xlsx("M5GlobalTestAndVariantScreenP_2023-07-13.xlsx", sheet="DFS")
+M5.uniMRD <- read_xlsx("M5GlobalTestAndVariantScreenP_2023-07-13.xlsx", sheet="MRD")
+```
+
+```{r}
+v1 <- c("Model", "Number Fail to Converge", "Number of Variants")
+v2 <- c("OS", length(M5.uniOS$MolecularFeature[which(M5.uniOS$OS.WarnFlag=="TRUE")]), length(M5.uniOS$MolecularFeature))
+v3 <- c("OS.adj", length(M5.uniOS$MolecularFeature[which(M5.uniOS$OS.WarnFlag.adj=="TRUE")]), length(M5.uniOS$MolecularFeature))
+v4 <- c("EFS", length(M5.uniEFS$MolecularFeature[which(M5.uniEFS$EFS.WarnFlag=="TRUE")]), length(M5.uniEFS$MolecularFeature))
+v5 <- c("EFS.adj", length(M5.uniEFS$MolecularFeature[which(M5.uniEFS$EFS.WarnFlag.adj=="TRUE")]), length(M5.uniEFS$MolecularFeature))
+v6 <- c("DFS", length(M5.uniDFS$MolecularFeature[which(M5.uniDFS$DFS.WarnFlag=="TRUE")]), length(M5.uniDFS$MolecularFeature))
+v7<- c("DFS.adj", length(M5.uniDFS$MolecularFeature[which(M5.uniDFS$DFS.WarnFlag.adj=="TRUE")]), length(M5.uniDFS$MolecularFeature))
+v8 <- c("MRD", length(M5.uniMRD$MolecularFeature[which(M5.uniMRD$MRD.WarnFlag=="TRUE")]), length(M5.uniMRD$MolecularFeature))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+
+```{r, echo=FALSE}
+v1 <- c("Model", "Number Significant", "Number of Variants")
+v2 <- c("OS", length(which(M5.uniOS$OS.P<0.05)), length(M5.uniOS$MolecularFeature))
+v3 <- c("OS.adj", length(which(M5.uniOS$OS.P.adj<0.05)), length(M5.uniOS$MolecularFeature))
+v4 <- c("EFS", length(which(M5.uniEFS$EFS.P<0.05)), length(M5.uniEFS$MolecularFeature))
+v5 <- c("EFS.adj", length(which(M5.uniEFS$EFS.P.adj<0.05)), length(M5.uniEFS$MolecularFeature))
+v6 <- c("DFS", length(which(M5.uni$DFS.P<0.05)), length(M5.uniDFS$MolecularFeature))
+v7<- c("DFS.adj", length(which(M5.uni$DFS.P.adj<0.05)), length(M5.uniDFS$MolecularFeature))
+v8 <- c("MRD", length(which(M5.uni$MRD.P < 0.05)), length(M5.uniMRD$MolecularFeature))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+```{r, echo=FALSE}
+# Forest plot function
+create_forestplot_noq <- function(est, lowerci, upperci, p, MolecularFeature, feat.name, title.name){
+  temp.df <- cbind.data.frame(est, lowerci, upperci, p, MolecularFeature)
+  colnames(temp.df) <- c("est", "Lower", "Upper", "P.old", "MolecularFeature")
+  temp.df$Est <- log2(exp(temp.df$est))
+  temp.df$logLower <- log(temp.df$Lower, base=2)
+  temp.df$logUpper <- log(temp.df$Upper, base=2)
+  temp.df$p <-round(temp.df$P.old, digits=3)
+  temp.df <- temp.df[order(temp.df$p),]
+  fp <- temp.df |> forestplot(mean=Est, lower=logLower, upper=logUpper, labeltext=c(MolecularFeature, p), xlab="log2(HR)", title=paste(title.name))|> 
+  fp_set_style(box = "royalblue",
+               line = "darkblue",
+               summary = "royalblue",
+               align = "lrrr",
+               hrz_lines = "#999999",
+               txt_gp = fpTxtGp(xlab=gpar(cex=1.2), ticks=gpar(cex=1.2))) |> 
+   fp_add_header(MolecularFeature=paste(feat.name), p="P-value")
+  return(fp)
+}
+```
+
+```{r}
+M5.uni.OS <- M5.uniOS[order(M5.uniOS$OS.P),]
+M5.uni.OS <- M5.uni.OS[1:20,]
+create_forestplot_noq(est=M5.uni.OS$OS.Coef, lowerci=M5.uni.OS$OS.Lower95, upperci=M5.uni.OS$OS.Upper95, p=M5.uni.OS$OS.P, MolecularFeature=M5.uni.OS$MolecularFeatureOld, feat.name="Variant", title.name="M5 Overall Survival")
+```
+
+
+```{r}
+M5.uni.OS <- M5.uniOS[order(M5.uniOS$OS.P.adj),]
+M5.uni.OS <- M5.uni.OS[1:20,]
+create_forestplot_noq(est=M5.uni.OS$OS.Coef.adj, lowerci=M5.uni.OS$OS.Lower95.adj, upperci=M5.uni.OS$OS.Upper95.adj, p=M5.uni.OS$OS.P.adj, MolecularFeature=M5.uni.OS$MolecularFeatureOld, feat.name="Variant", title.name="M5 Adjusted Overall Survival")
+```
+
+```{r}
+M5.uni.EFS <- M5.uniEFS[order(M5.uniEFS$EFS.P),]
+M5.uni.EFS <- M5.uni.EFS[1:20,]
+create_forestplot_noq(est=M5.uni.EFS$EFS.Coef, lowerci=M5.uni.EFS$EFS.Lower95, upperci=M5.uni.EFS$EFS.Upper95, p=M5.uni.EFS$EFS.P, MolecularFeature=M5.uni.EFS$MolecularFeatureOld, feat.name="Variant", title.name="M5 Event-Free Survival")
+```
+
+
+```{r}
+M5.uni.EFS <- M5.uniEFS[order(M5.uniEFS$EFS.P.adj),]
+M5.uni.EFS <- M5.uni.EFS[1:20,]
+create_forestplot_noq(est=M5.uni.EFS$EFS.Coef.adj, lowerci=M5.uni.EFS$EFS.Lower95.adj, upperci=M5.uni.EFS$EFS.Upper95.adj, p=M5.uni.EFS$EFS.P.adj, MolecularFeature=M5.uni.EFS$MolecularFeatureOld, feat.name="Variant", title.name="M5 Adjusted Event-free Survival")
+```
+
+```{r}
+M5.uni.DFS <- M5.uniDFS[order(M5.uniDFS$DFS.P),]
+M5.uni.DFS <- M5.uni.DFS[1:20,]
+create_forestplot_noq(est=M5.uni.DFS$DFS.Coef, lowerci=M5.uni.DFS$DFS.Lower95, upperci=M5.uni.DFS$DFS.Upper95, p=M5.uni.DFS$DFS.P, MolecularFeature=M5.uni.DFS$MolecularFeatureOld, feat.name="Variant", title.name="M5 Disease-Free Survival")
+```
+
+
+```{r}
+M5.uni.DFS <- M5.uniDFS[order(M5.uniDFS$DFS.P.adj),]
+M5.uni.DFS <- M5.uni.DFS[1:20,]
+create_forestplot_noq(est=M5.uni.DFS$DFS.Coef.adj, lowerci=M5.uni.DFS$DFS.Lower95.adj, upperci=M5.uni.DFS$DFS.Upper95.adj, p=M5.uni.DFS$DFS.P.adj, MolecularFeature=M5.uni.DFS$MolecularFeatureOld, feat.name="Variant", title.name="M5 Adjusted Disease-free Survival")
+```
+
+
+```{r}
+M5.uni.MRD <- M5.uniMRD
+M5.uni.MRD$p <- formatC(M5.uni.MRD$MRD.P, format="e", digits=3)
+M5.uni.MRD <- M5.uni.MRD[order(M5.uni.MRD$MRD.P),]
+M5.uni.MRD <- M5.uni.MRD[1:20,]
+M5.uni.MRD |> forestplot(mean=MRD.Coef, lower=MRD.Lower95, upper=MRD.Upper95, labeltext=c(MolecularFeatureOld, p), xlab="log(OR)", title="M5 Minimal Residual Disease") |> 
+  fp_set_style(box = "royalblue",
+               line = "darkblue",
+               summary = "royalblue",
+               align = "lrrr",
+               hrz_lines = "#999999",
+               txt_gp = fpTxtGp(xlab=gpar(cex=1.2), ticks=gpar(cex=1.2))) |> 
+   fp_add_header(MolecularFeatureOld="Variant",
+                p="P-value")
+```
+
+
+# M7 Immunophenotype
+
+
+
+```{r}
+setwd(res.dir)
+M7.uni <- read.csv("M7_Uni_Screen_Corrected_2023-07-13.csv")
+```
+
+
+```{r}
+v1 <- c("Model", paste0("Number Fail to Converge out of ", nrow(M7.uni)))
+v2 <- c("OS", length(M7.uni$MolecularFeature[which(M7.uni$OS.WarnFlag=="TRUE")]))
+v3 <- c("OS.adj", length(M7.uni$MolecularFeature[which(M7.uni$OS.WarnFlag.adj=="TRUE")]))
+v4 <- c("EFS", length(M7.uni$MolecularFeature[which(M7.uni$EFS.WarnFlag=="TRUE")]))
+v5 <- c("EFS.adj", length(M7.uni$MolecularFeature[which(M7.uni$EFS.WarnFlag.adj=="TRUE")]))
+v6 <- c("DFS", length(M7.uni$MolecularFeature[which(M7.uni$DFS.WarnFlag=="TRUE")]))
+v7<- c("DFS.adj", length(M7.uni$MolecularFeature[which(M7.uni$DFS.WarnFlag.adj=="TRUE")]))
+v8 <- c("MRD", length(M7.uni$MolecularFeature[which(M7.uni$MRD.WarnFlag=="TRUE")]))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+```{r}
+v1 <- c("Model", paste0("Number Significant out of ", nrow(M7.uni)))
+v2 <- c("OS", length(which(M7.uni$OS.P<0.05)))
+v3 <- c("OS.adj", length(which(M7.uni$OS.P.adj<0.05)))
+v4 <- c("EFS", length(which(M7.uni$EFS.P<0.05)))
+v5 <- c("EFS.adj", length(which(M7.uni$EFS.P.adj<0.05)))
+v6 <- c("DFS", length(which(M7.uni$DFS.P<0.05)))
+v7<- c("DFS.adj", length(which(M7.uni$DFS.P.adj<0.05)))
+v8 <- c("MRD", length(which(M7.uni$MRD.P < 0.05)))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+```{r}
+# Add count and number of events
+M7.uni$N.case <- colSums(M7.IP)
+all.equal(rownames(annot), rownames(M7.IP))
+M7.uni$N.OS <- colSums(M7.IP[which(annot$OS.status==1),])
+M7.uni$N.EFS <- colSums(M7.IP[which(annot$EFS.status==1),])
+M7.uni$N.DFS <- colSums(M7.IP[which(annot$DFS.status==1),])
+M7.uni$N.MRD.Pos <- colSums(M7.IP[which(annot$Day.29.MRD>=0.1),])
+```
+
+```{r}
+create_forestplot(est=M7.uni$OS.Coef, lowerci=M7.uni$OS.Lower95, upperci=M7.uni$OS.Upper95, q=M7.uni$OS.q, p=M7.uni$OS.P, MolecularFeature=paste0(M7.uni$MolecularFeatureOld, " (N=", M7.uni$N.case, ", Events=", M7.uni$N.OS, ")"), feat.name="Immunophenotype", title.name="M7 Overall Survival")
+```
+
+```{r}
+create_forestplot(est=M7.uni$OS.Coef.adj, lowerci=M7.uni$OS.Lower95.adj, upperci=M7.uni$OS.Upper95.adj, p=M7.uni$OS.P.adj, q=M7.uni$OS.q.adj, MolecularFeature=paste0(M7.uni$MolecularFeatureOld, " (N=", M7.uni$N.case, ", Events=", M7.uni$N.OS, ")"), feat.name="Immunophenotype", title.name="M7 Adjusted Overall Survival")
+```
+
+```{r}
+create_forestplot(est=M7.uni$EFS.Coef, lowerci=M7.uni$EFS.Lower95, upperci=M7.uni$EFS.Upper95, p=M7.uni$EFS.P, q=M7.uni$EFS.q, MolecularFeature=paste0(M7.uni$MolecularFeatureOld, " (N=", M7.uni$N.case, ", Events=", M7.uni$N.EFS, ")"), feat.name="Immunophenotype", title.name="M7 Event-free Survival")
+```
+
+```{r}
+create_forestplot(est=M7.uni$EFS.Coef.adj, lowerci=M7.uni$EFS.Lower95.adj, upperci=M7.uni$EFS.Upper95.adj, p=M7.uni$EFS.P.adj, q=M7.uni$EFS.q.adj, MolecularFeature=paste0(M7.uni$MolecularFeatureOld, " (N=", M7.uni$N.case, ", Events=", M7.uni$N.EFS, ")"), feat.name="Immunophenotype", title.name="M7 Adjusted Event-free Survival")
+```
+
+```{r}
+create_forestplot(est=M7.uni$DFS.Coef, lowerci=M7.uni$DFS.Lower95, upperci=M7.uni$DFS.Upper95, p=M7.uni$DFS.P, q=M7.uni$DFS.q, MolecularFeature=paste0(M7.uni$MolecularFeatureOld, " (N=", M7.uni$N.case, ", Events=", M7.uni$N.DFS, ")"), feat.name="Immunophenotype", title="M7 Disease-free Survival")
+```
+
+```{r}
+create_forestplot(est=M7.uni$DFS.Coef.adj, lowerci=M7.uni$DFS.Lower95.adj, upperci=M7.uni$DFS.Upper95.adj, p=M7.uni$DFS.P.adj, q=M7.uni$DFS.q.adj, MolecularFeature=paste0(M7.uni$MolecularFeatureOld, " (N=", M7.uni$N.case, ", Events=", M7.uni$N.DFS, ")"), feat.name="Immunophenotype", title="M7 Adjusted Disease-free Survival")
+```
+```{r}
+M7.uni.MRD <- M7.uni[,c(2,3, grep("MRD", colnames(M7.uni)), grep("N.case", colnames(M7.uni)))]
+M7.uni.MRD$q <- formatC(M7.uni.MRD$MRD.q, format="e", digits=3)
+M7.uni.MRD$p <- formatC(M7.uni.MRD$MRD.P, format="e", digits=3)
+M7.uni.MRD$term <- paste0(M7.uni.MRD$MolecularFeatureOld, " (N=", M7.uni$N.case, ", Events=", M7.uni$N.MRD.Pos, ")")
+#M7.uni.MRD$q <- M7.uni.MRD$MRD.q
+M7.uni.MRD <- M7.uni.MRD[order(M7.uni.MRD$MRD.q),]
+M7.uni.MRD |> forestplot(mean=MRD.Coef, lower=MRD.Lower95, upper=MRD.Upper95, labeltext=c(term, p, q), xlab="log2(OR)", title="M7 Minimal Residual Disease") |> 
+  fp_set_style(box = "royalblue",
+               line = "darkblue",
+               summary = "royalblue",
+               align = "lrrr",
+               hrz_lines = "#999999",
+               txt_gp = fpTxtGp(xlab=gpar(cex=1.2), ticks=gpar(cex=1.2))) |> 
+   fp_add_header(term="Immunophenotype", p="P-value",
+                q="q-value")
+```
+
+
+
+
+# Gene Expression
+
+Because there are almost 24000 genes in the dataset, we only showed the top 20 genes with smallest P-value in each of the forest plots below. For gene expression, we only adjusted for MRD for OS, EFS, and DFS. We did not fit an adjusted MRD model. Also, for DFS we adjusted the survival time of those with DFS=0 by sampling from a Uniform(0,1) distribution to help improve convergence by not having a large number of tied DFS=0.5 as in the other univariate screens.
+
+There were 16 features that failed to converge in the adjusted OS model, and 914 features that failed to converge in the adjusted EFS model. We re-ran the coxphf model for OS.adj with max.step=0.001 and max.it=12000 for these 16 features and they converged. For the 914 features that failed to converge for DFS.adj, we re-ran coxphf with max.step=0.001 and max.it=14000.
+
+
+
+```{r}
+setwd(res.dir)
+gexp.uni <- read.csv("Gexp_Uni_Screen_Corrected_2023-07-12.csv")
+gexp.uni <- gexp.uni[,-1]
+```
+
+
+```{r}
+v1 <- c("Model", paste0("Number Fail to Converge out of ", nrow(gexp.uni)))
+v2 <- c("OS", length(gexp.uni$MolecularFeature[which(gexp.uni$OS.WarnFlag=="TRUE")]))
+v3 <- c("OS.adj", length(gexp.uni$MolecularFeature[which(gexp.uni$OS.WarnFlag.adj=="TRUE")]))
+v4 <- c("EFS", length(gexp.uni$MolecularFeature[which(gexp.uni$EFS.WarnFlag=="TRUE")]))
+v5 <- c("EFS.adj", length(gexp.uni$MolecularFeature[which(gexp.uni$EFS.WarnFlag.adj=="TRUE")]))
+v6 <- c("DFS", length(gexp.uni$MolecularFeature[which(gexp.uni$DFS.WarnFlag=="TRUE")]))
+v7<- c("DFS.adj", length(gexp.uni$MolecularFeature[which(gexp.uni$DFS.WarnFlag.adj=="TRUE")]))
+v8 <- c("MRD", length(gexp.uni$MolecularFeature[which(gexp.uni$MRD.WarnFlag=="TRUE")]))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+
+
+
+
+```{r}
+v1 <- c("Model", paste0("Number Significant out of ", nrow(gexp.uni)))
+v2 <- c("OS", length(which(gexp.uni$OS.P<0.05)))
+v3 <- c("OS.adj", length(which(gexp.uni$OS.P.adj<0.05)))
+v4 <- c("EFS", length(which(gexp.uni$EFS.P<0.05)))
+v5 <- c("EFS.adj", length(which(gexp.uni$EFS.P.adj<0.05)))
+v6 <- c("DFS", length(which(gexp.uni$DFS.P<0.05)))
+v7<- c("DFS.adj", length(which(gexp.uni$DFS.P.adj<0.05)))
+v8 <- c("MRD", length(which(gexp.uni$MRD.P < 0.05)))
+df <- rbind.data.frame(v2, v3, v4, v5, v6, v7, v8)
+colnames(df) <- v1
+df
+```
+
+
+```{r}
+gexp.uni.OS <- gexp.uni[order(gexp.uni$OS.P),]
+gexp.uni.OS <- gexp.uni.OS[1:20,]
+create_forestplot(est=gexp.uni.OS$OS.Coef, lowerci=gexp.uni.OS$OS.Lower95, upperci=gexp.uni.OS$OS.Upper95, p=gexp.uni.OS$OS.P, q=gexp.uni.OS$OS.q, MolecularFeature=gexp.uni.OS$MolecularFeature, feat.name="Gene", title.name="gexp Overall Survival")
+```
+
+```{r}
+gexp.uni.OS <- gexp.uni[order(gexp.uni$OS.P.adj),]
+gexp.uni.OS <- gexp.uni.OS[1:20,]
+create_forestplot(est=gexp.uni.OS$OS.Coef.adj, lowerci=gexp.uni.OS$OS.Lower95.adj, upperci=gexp.uni.OS$OS.Upper95.adj, p=gexp.uni.OS$OS.P.adj, q=gexp.uni.OS$OS.q.adj, MolecularFeature=gexp.uni.OS$MolecularFeature, feat.name="Gene", title.name="gexp Adjusted Overall Survival")
+```
+
+```{r}
+gexp.uni.EFS <- gexp.uni[order(gexp.uni$EFS.P),]
+gexp.uni.EFS <- gexp.uni.EFS[1:20,]
+create_forestplot(est=gexp.uni.EFS$EFS.Coef, lowerci=gexp.uni.EFS$EFS.Lower95, upperci=gexp.uni.EFS$EFS.Upper95, p=gexp.uni.EFS$EFS.P, q=gexp.uni.EFS$EFS.q, MolecularFeature=gexp.uni.EFS$MolecularFeature, feat.name="Gene", title.name="gexp Event-free Survival")
+```
+
+```{r}
+gexp.uni.EFS <- gexp.uni[order(gexp.uni$EFS.P.adj),]
+gexp.uni.EFS <- gexp.uni.EFS[1:20,]
+create_forestplot(est=gexp.uni.EFS$EFS.Coef.adj, lowerci=gexp.uni.EFS$EFS.Lower95.adj, upperci=gexp.uni.EFS$EFS.Upper95.adj, p=gexp.uni.EFS$EFS.P.adj, q=gexp.uni.EFS$EFS.q.adj, MolecularFeature=gexp.uni.EFS$MolecularFeature, feat.name="Gene", title.name="gexp Adjusted Event-free Survival")
+```
+
+```{r}
+gexp.uni.DFS <- gexp.uni[order(gexp.uni$DFS.P),]
+gexp.uni.DFS <- gexp.uni.DFS[1:20,]
+create_forestplot(est=gexp.uni.DFS$DFS.Coef, lowerci=gexp.uni.DFS$DFS.Lower95, upperci=gexp.uni.DFS$DFS.Upper95, p=gexp.uni.DFS$DFS.P, q=gexp.uni.DFS$DFS.q, MolecularFeature=gexp.uni.DFS$MolecularFeature, feat.name="Gene", title.name="gexp Disease-free Survival")
+```
+
+```{r}
+# DFS.adj had a lot of lack of convergence, could not get confidence intervals
+gexp.uni.DFS <- gexp.uni[order(gexp.uni$DFS.P.adj),]
+gexp.uni.DFS <- gexp.uni.DFS[1:20,]
+create_forestplot(est=gexp.uni.DFS$DFS.Coef.adj, lowerci=gexp.uni.DFS$DFS.Lower95.adj, upperci=gexp.uni.DFS$DFS.Upper95.adj, p=gexp.uni.DFS$DFS.P.adj, q=gexp.uni.DFS$DFS.q.adj, MolecularFeature=gexp.uni.DFS$MolecularFeature, feat.name="Gene", title.name="gexp Adjusted Disease-free Survival")
+```
+
+
+```{r}
+gexp.uni.MRD <- gexp.uni[,c(1, 56:64)]
+gexp.uni.MRD$q <- formatC(gexp.uni.MRD$MRD.q, format="e", digits=3)
+gexp.uni.MRD <- gexp.uni.MRD[order(gexp.uni.MRD$MRD.P),]
+gexp.uni.MRD <- gexp.uni.MRD[1:20,]
+gexp.uni.MRD |> forestplot(mean=MRD.Coef, lower=MRD.Lower95, upper=MRD.Upper95, labeltext=c(MolecularFeature, q), xlab="log(OR)", title="gexp Minimal Residual Disease") |> 
+  fp_set_style(box = "royalblue",
+               line = "darkblue",
+               summary = "royalblue",
+               align = "lrrr",
+               hrz_lines = "#999999",
+               txt_gp = fpTxtGp(xlab=gpar(cex=1.2), ticks=gpar(cex=1.2))) |> 
+   fp_add_header(MolecularFeature="Gene",
+                q="q-value")
+```
+
+# Session Information
+
+```{r}
+sessionInfo()
+```
+

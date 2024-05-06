@@ -1,0 +1,2192 @@
+---
+title: "Competing Risks Analysis T-ALL X01 Data"
+author: "AES"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    df_print: paged
+    number_sections: yes
+    highlight: haddock
+  html_notebook:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# load survival packages
+library(survival)
+library(survminer)
+library(coxphf)
+library(logistf)
+library(stringr)
+library(writexl)
+#library(cmprsk)
+library(tidycmprsk)
+library(gtsummary)
+library(ggsurvfit)
+library(forestplot)
+library(tidyr)
+library(dplyr)
+```
+
+# Introduction
+
+For EFS, there are three different event types of interest: relapse, toxic death, and secondary cancer. To assess the association between molecular features and time to these events of interest we fit Fine-Gray models. These models are similar to Cox proportional hazards models, but account for competing risks problem. This model is available in the $\texttt{tidycmprsk}$ package. We also visualize the results using forest plots of the log-hazard ratio and cumulative incidence plots for each event of interest. 
+
+For each event type, we also filtered to include only factor levels or variables with at least 3 events of that type. When the number of events is small, the estiamted HR and confidence intervals are unstable. 
+
+# Setup
+
+```{r}
+# Define results directory
+res.dir <- "Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Results/CompetingRisks/"
+
+# load data
+# data path on cluster
+#load("/home/aseffern/PetriProject/Jan2023Data/MULLI-T-ALL-GM-Teachey_outcome_data.Rdata")
+# data path locally
+load("Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Data/Data_1309Samples.RData")
+
+
+# Create grouped variables
+annot$MRD.ord <- ifelse(is.na(annot$Day.29.MRD), NA, ifelse(annot$Day.29.MRD<0.1, "Negative", ifelse(annot$Day.29.MRD<10, "Low Positive", "High Positive")))
+annot$MRD.bin <- ifelse(is.na(annot$Day.29.MRD), NA, ifelse(annot$Day.29.MRD<0.1, "Negative", "Positive"))
+annot$MRD.bin01 <- ifelse(annot$MRD.bin=="Negative", 0, 1)
+
+# Create event type for tidycmprsk::crr
+annot$status <- as.factor(ifelse(annot$Event.Type=="Relapse", 1, ifelse(annot$Event.Type=="Toxic Death", 2, ifelse(annot$Event.Type=="Second Malignant Neoplasm", 3, 0))))
+#View(annot[,c("EFS", "EFS.status", "Event.Type", "status")])
+```
+
+# M1: Drivers
+
+
+```{r}
+m1.f <- as.factor(M1.classifying.driver.factor$Driver.Gene)
+m1.f <- str_replace_all(m1.f, "-", "_")
+levels(as.factor(m1.f))
+M1.factor <- as.data.frame(m1.f)
+rownames(M1.factor) <- rownames(M1.classifying.driver)
+colnames(M1.factor) <- "Driver"
+which.max(table(M1.factor$Driver))
+M1.factor$Driver <- as.factor(M1.factor$Driver)
+M1.factor$Driver <- with(M1.factor, relevel(Driver, ref="TAL1"))
+```
+
+```{r}
+M1.data <- as.data.frame(M1.classifying.driver)
+colnames(M1.data) <- janitor::make_clean_names(colnames(M1.classifying.driver))
+M1.data[1:5, 1:5]
+M1.data2 <- cbind.data.frame(annot$EFS, annot$status, M1.data)
+colnames(M1.data2)[1:2] <- c("time", "status")
+tidycmprsk::crr(Surv(time, status)~., data=M1.data2) %>% tbl_regression(exp=TRUE)
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ spi1, M1.data2) %>%
+  ggcuminc(outcome = c("1"), theme=list(theme_classic())) +
+  add_risktable() + add_legend_title("SPI1 (1) vs. Not (0)") + labs(title="Cumulative Incidence of Relapse")
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ spi1, M1.data2) %>%
+  ggcuminc(outcome = c("2"), theme=list(theme_classic())) +
+  add_risktable() + add_legend_title("SPI1 (1) vs. Not (0)") + labs(title="Cumulative Incidence of Toxic Death")
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ spi1, M1.data2) %>%
+  ggcuminc(outcome = c("3"), theme=list(theme_classic())) +
+  add_risktable() + add_legend_title("SPI1 (1) vs. Not (0)") + labs(title="Cumulative Incidence of Second Cancer")
+```
+
+```{r}
+M1.data3 <- M1.data2
+M1.data3$time <- M1.data2$time/365.25
+M1.data3.f <- M1.data3[which(M1.data3$time<=5),]
+tidycmprsk::cuminc(Surv(time, status) ~ spi1, M1.data3.f) %>%
+  ggcuminc(outcome = c("3"), theme=list(theme_classic())) +
+  add_risktable() + add_legend_title("SPI1 (1) vs. Not (0)") + labs(title="Cumulative Incidence of Second Cancer")
+```
+
+```{r}
+M1.data3.f <- M1.data3[which(M1.data3$time<=5),]
+tidycmprsk::cuminc(Surv(time, status) ~ spi1, M1.data3.f) %>%
+  ggcuminc(outcome = c("3"), theme=list(theme_classic())) +
+  add_risktable() + add_legend_title("SPI1 (1) vs. Not (0)") + 
+  labs(title="Cumulative Incidence of Second Cancer") + add_censor_mark()
+```
+
+
+```{r}
+M1.data3.f <- M1.data3[which(M1.data3$time<=3),]
+tidycmprsk::cuminc(Surv(time, status) ~ spi1, M1.data3.f) %>%
+  ggcuminc(outcome = c("3"), theme=list(theme_classic())) +
+  add_risktable() + add_legend_title("SPI1 (1) vs. Not (0)") + labs(title="Cumulative Incidence of Second Cancer")
+```
+
+
+## Relapse
+
+Note these models were fit on the factor version of Driver, so HR's are relative to TAL1 and TAL1 is not included in forest plots. 
+
+```{r}
+M1.dataf <- cbind.data.frame(annot$EFS, annot$status, M1.factor$Driver)
+colnames(M1.dataf) <- c("time", "status", "Driver")
+tidycmprsk::crr(Surv(time, status)~Driver, data=M1.dataf) %>% tbl_regression(exp=TRUE)
+```
+
+```{r}
+Driver.tab <- table(M1.dataf$Driver, M1.dataf$status)
+Driver.tab
+```
+
+
+```{r}
+M1.dataf.SPI1 <- M1.dataf[which(M1.dataf$Driver=="SPI1"),]
+table(M1.dataf.SPI1$status)
+```
+```{r}
+M1.ann <- cbind.data.frame(M1.factor$Driver, annot)
+colnames(M1.ann)[1] <- "Driver"
+M1.ann.SPI1 <- M1.ann[which(M1.ann$Driver=="SPI1"),]
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write_xlsx(M1.ann.SPI1, "SPI1_ann_2023-07-17.xlsx")
+```
+
+
+
+```{r}
+fit <- tidycmprsk::crr(Surv(time, status)~Driver, data=M1.dataf)
+fit$tidy$MolecularFeatureOld <- str_replace_all(fit$tidy$term, "_", "-")
+fit$tidy$MolecularFeatureOld2 <- substring(fit$tidy$MolecularFeatureOld, 7)
+```
+
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit$tidy, file="M1Relapse_CR_2023-07-17.csv", row.names = FALSE)
+```
+
+```{r}
+Driver.Rel3 <- rownames(Driver.tab[which(Driver.tab[,2]>=3),])
+M1.dataf.rel <- M1.dataf[which(M1.dataf$Driver %in% Driver.Rel3),]
+fit <- tidycmprsk::crr(Surv(time, status)~Driver, data=M1.dataf.rel)
+fit$tidy$MolecularFeatureOld <- str_replace_all(fit$tidy$term, "_", "-")
+fit$tidy$MolecularFeatureOld2 <- substring(fit$tidy$MolecularFeatureOld, 7)
+```
+
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit$tidy, file="M1Relapse_AtLeast3_CR_2023-07-27.csv", row.names = FALSE)
+```
+
+```{r}
+est <- fit$tidy$estimate
+lowerci <- fit$tidy$conf.low
+upperci <- fit$tidy$conf.high
+p <- fit$tidy$p.value
+MolecularFeature <- fit$tidy$MolecularFeatureOld2
+feat.name <- "Driver"
+title.name <- "Relapse vs. Other Event"
+create_forestplot <- function(est, lowerci, upperci, p, MolecularFeature, feat.name, title.name){
+  temp.df <- cbind.data.frame(est, lowerci, upperci, p, MolecularFeature)
+  colnames(temp.df) <- c("Est", "Lower", "Upper", "p.old", "MolecularFeature")
+  temp.df$p <- round(temp.df$p.old, digits=3)
+  temp.df <- temp.df[order(temp.df$p),]
+  fp <- temp.df |> forestplot(mean=Est, lower=Lower, upper=Upper, labeltext=c(MolecularFeature, p), xlab="log(HR)", title=paste(title.name))|> 
+  fp_set_style(box = "royalblue",
+               line = "darkblue",
+               summary = "royalblue",
+               align = "lrrr",
+               hrz_lines = "#999999",
+               txt_gp = fpTxtGp(xlab=gpar(cex=1.2), ticks=gpar(cex=1.2))) |> 
+   fp_add_header(MolecularFeature=paste(feat.name),
+                p="P-value")
+  return(fp)
+}
+```
+
+```{r}
+create_forestplot(est=fit$tidy$estimate, lowerci=fit$tidy$conf.low, upperci=fit$tidy$conf.high, p=fit$tidy$p.value,
+                  MolecularFeature = fit$tidy$MolecularFeatureOld2, feat.name="Driver", title.name="Relapse as Event of Interest")
+```
+
+```{r, eval=FALSE}
+sub.tab <- as.data.frame(table(M1.dataf$Driver, M1.dataf$status))
+sub.zero <- sub.tab[which(sub.tab$Freq==0),]
+sub.zero.rel <- sub.zero[which(sub.zero$Var2==1),]
+sub.zero.rel$Var1
+```
+
+```{r,eval=FALSE}
+tidy.sm <- fit$tidy[-which(fit$tidy$term %in% paste0("Driver", as.character(sub.zero.rel$Var1))),]
+```
+
+```{r, eval=FALSE}
+create_forestplot(est=tidy.sm$estimate, lowerci=tidy.sm$conf.low, upperci=tidy.sm$conf.high, p=tidy.sm$p.value,
+                  MolecularFeature = tidy.sm$MolecularFeatureOld2, feat.name="Driver", title.name="Relapse as Event of Interest")
+```
+
+
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ Driver, M1.dataf) %>%
+  ggcuminc() 
+#  add_confidence_interval() +
+#  add_risktable()
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ Driver, M1.dataf.rel) %>%
+  ggcuminc() 
+#  add_confidence_interval() +
+#  add_risktable()
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ 1, M1.dataf.SPI1) %>%
+  ggcuminc(outcome = c("1", "2", "3"), theme=list(theme_classic())) +
+  add_risktable()
+```
+
+```{r}
+M1.dataf.TLX3 <- M1.dataf[which(M1.dataf$Driver=="TLX3"),]
+tidycmprsk::cuminc(Surv(time, status) ~ 1, M1.dataf.TLX3) %>%
+  ggcuminc(outcome = c("1", "2", "3"), theme=list(theme_classic())) +
+  add_risktable()
+```
+
+
+
+## Relapse + MRD
+
+```{r}
+M1.datafm <- cbind.data.frame(annot$EFS, annot$status, M1.factor$Driver, annot$MRD.ord)
+colnames(M1.datafm) <- c("time", "status", "Driver", "MRD")
+tidycmprsk::crr(Surv(time, status)~Driver + MRD, data=M1.datafm) %>% tbl_regression(exp=TRUE)
+```
+
+```{r}
+fitm <- tidycmprsk::crr(Surv(time, status)~Driver+MRD, data=M1.datafm)
+fitm$tidy$MolecularFeatureOld <- str_replace_all(fitm$tidy$term, "_", "-")
+fitm$tidy$MolecularFeatureOld2 <- substring(fitm$tidy$MolecularFeatureOld, 7)
+```
+
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fitm$tidy, file="M1RelapseMRD_CR_2023-07-17.csv", row.names = FALSE)
+```
+
+
+
+```{r}
+M1.datafm.Rel <- M1.datafm[which(M1.datafm$Driver %in% Driver.Rel3),]
+fitm <- tidycmprsk::crr(Surv(time, status)~Driver+MRD, data=M1.datafm.Rel)
+fitm$tidy$MolecularFeatureOld <- str_replace_all(fitm$tidy$term, "_", "-")
+fitm$tidy$MolecularFeatureOld2 <- substring(fitm$tidy$MolecularFeatureOld, 7)
+```
+
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fitm$tidy, file="M1RelapseMRD_AtLeast3_CR_2023-07-27.csv", row.names = FALSE)
+```
+
+```{r}
+create_forestplot(est=fitm$tidy$estimate, lowerci=fitm$tidy$conf.low, upperci=fitm$tidy$conf.high, p=fitm$tidy$p.value,
+                  MolecularFeature = fitm$tidy$term, feat.name="Driver/MRD", title.name="Relapse as Event of Interest")
+```
+
+
+```{r, eval=FALSE}
+tidy.sm <- fitm$tidy[-which(fitm$tidy$term %in% paste0("Driver", as.character(sub.zero.rel$Var1))),]
+```
+
+```{r, eval=FALSE}
+create_forestplot(est=tidy.sm$estimate, lowerci=tidy.sm$conf.low, upperci=tidy.sm$conf.high, p=tidy.sm$p.value,
+                  MolecularFeature = tidy.sm$term, feat.name="Driver/MRD", title.name="Relapse as Event of Interest")
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ Driver + MRD, M1.datafm) %>%
+  ggcuminc() 
+#  add_confidence_interval() +
+#  add_risktable()
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ Driver + MRD, M1.datafm.Rel) %>%
+  ggcuminc() 
+#  add_confidence_interval() +
+#  add_risktable()
+```
+
+## Toxic Death
+
+```{r}
+tidycmprsk::crr(Surv(time, status)~Driver, data=M1.dataf, failcode=2) %>% tbl_regression(exp=TRUE)
+```
+
+```{r}
+fit2 <- tidycmprsk::crr(Surv(time, status)~Driver, data=M1.dataf, failcode=2)
+fit2$tidy$MolecularFeatureOld <- str_replace_all(fit2$tidy$term, "_", "-")
+fit2$tidy$MolecularFeatureOld2 <- substring(fit2$tidy$MolecularFeatureOld, 7)
+```
+
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit2$tidy, file="M1Toxic_CR_2023-07-17.csv", row.names = FALSE)
+```
+
+```{r}
+Driver.TD3 <- rownames(Driver.tab[which(Driver.tab[,3]>=3),])
+M1.dataf.td <- M1.dataf[which(M1.dataf$Driver %in% Driver.TD3),]
+fit2 <- tidycmprsk::crr(Surv(time, status)~Driver, data=M1.dataf.td, failcode=2)
+fit2$tidy$MolecularFeatureOld <- str_replace_all(fit2$tidy$term, "_", "-")
+fit2$tidy$MolecularFeatureOld2 <- substring(fit2$tidy$MolecularFeatureOld, 7)
+```
+
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit2$tidy, file="M1Toxic_AtLeast3_CR_2023-07-27.csv", row.names = FALSE)
+```
+
+```{r}
+create_forestplot(est=fit2$tidy$estimate, lowerci=fit2$tidy$conf.low, upperci=fit2$tidy$conf.high, p=fit2$tidy$p.value,
+                  MolecularFeature = fit2$tidy$MolecularFeatureOld2, feat.name="Driver", title.name="Toxic Death as Event of Interest")
+```
+
+```{r, eval=FALSE}
+sub.zero.tox <- sub.zero[which(sub.zero$Var2==2),]
+sub.zero.tox$Var1
+```
+
+```{r, eval=FALSE}
+tidy.sm2 <- fit2$tidy[-which(fit2$tidy$term %in% paste0("Driver", as.character(sub.zero.tox$Var1))),]
+```
+
+```{r, eval=FALSE}
+create_forestplot(est=tidy.sm2$estimate, lowerci=tidy.sm2$conf.low, upperci=tidy.sm2$conf.high, p=tidy.sm2$p.value,
+                  MolecularFeature = tidy.sm2$MolecularFeatureOld2, feat.name="Driver", title.name="Toxic Death as Event of Interest")
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ Driver, M1.dataf, failcode=2) %>%
+  ggcuminc(outcome="2") 
+#  add_confidence_interval() +
+#  add_risktable()
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ Driver, M1.dataf.td, failcode=2) %>%
+  ggcuminc(outcome="2") 
+#  add_confidence_interval() +
+#  add_risktable()
+```
+
+## Secondary Malignant Neoplasm
+
+```{r}
+tidycmprsk::crr(Surv(time, status)~Driver, data=M1.dataf, failcode=3) %>% tbl_regression(exp=TRUE)
+```
+
+```{r}
+fit3 <- tidycmprsk::crr(Surv(time, status)~Driver, data=M1.dataf, failcode=3)
+fit3$tidy$MolecularFeatureOld <- str_replace_all(fit3$tidy$term, "_", "-")
+fit3$tidy$MolecularFeatureOld2 <- substring(fit3$tidy$MolecularFeatureOld, 7)
+```
+
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit3$tidy, file="M1SecCan_CR_2023-07-16.csv", row.names = FALSE)
+```
+
+```{r}
+Driver.SC3 <- rownames(Driver.tab[which(Driver.tab[,4]>=3),])
+M1.dataf.sc <- M1.dataf[which(M1.dataf$Driver %in% Driver.SC3),]
+fit3 <- tidycmprsk::crr(Surv(time, status)~Driver, data=M1.dataf.sc, failcode=3)
+fit3$tidy$MolecularFeatureOld <- str_replace_all(fit3$tidy$term, "_", "-")
+fit3$tidy$MolecularFeatureOld2 <- substring(fit3$tidy$MolecularFeatureOld, 7)
+```
+
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit3$tidy, file="M1SecCan_AtLeast3_CR_2023-07-27.csv", row.names = FALSE)
+```
+```{r}
+fit3$tidy
+```
+
+
+```{r, eval=FALSE}
+create_forestplot(est=fit3$tidy$estimate, lowerci=fit3$tidy$conf.low, upperci=fit3$tidy$conf.high, p=fit3$tidy$p.value,
+                  MolecularFeature = fit3$tidy$MolecularFeatureOld2, feat.name="Driver", title.name="Second Cancer as Event of Interest")
+```
+
+```{r, eval=FALSE}
+sub.zero.sec <- sub.zero[which(sub.zero$Var2==3),]
+sub.zero.sec$Var1
+```
+
+```{r, eval=FALSE}
+tidy.sm3 <- fit3$tidy[-which(fit3$tidy$term %in% paste0("Driver", as.character(sub.zero.sec$Var1))),]
+```
+
+```{r, eval=FALSE}
+create_forestplot(est=tidy.sm3$estimate, lowerci=tidy.sm3$conf.low, upperci=tidy.sm3$conf.high, p=tidy.sm3$p.value,
+                  MolecularFeature = tidy.sm3$MolecularFeatureOld2, feat.name="Driver", title.name="Second Cancer as Event of Interest")
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ Driver, M1.dataf, failcode=3) %>%
+  ggcuminc(outcome="3") 
+#  add_confidence_interval() +
+#  add_risktable()
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ Driver, M1.dataf.sc, failcode=3) %>%
+  ggcuminc(outcome="3") 
+#  add_confidence_interval() +
+#  add_risktable()
+```
+
+# M3: Subtype
+
+Note these models were fit on the factor version of Driver, so HR's are relative to TAL1 DP-like and TAL1 DP-like is not included in forest plots. 
+
+```{r}
+cn.f <- as.factor(M3.subtype.factor$Reviewed.subtype)
+cn.f <- str_replace_all(cn.f, "-", "_")
+cn.f <- str_replace_all(cn.f, "&", "_")
+cn.f <- str_replace_all(cn.f, "α", "a")
+cn.f <- str_replace_all(cn.f, "β", "b")
+cn.f <- str_replace_all(cn.f, "γ", "g")
+cn.f <- str_replace_all(cn.f, "δ", "d")
+cn.f <- str_replace_all(cn.f, " ", "_")
+levels(as.factor(cn.f))
+M3.factor <- as.data.frame(cn.f)
+rownames(M3.factor) <- rownames(M3.subtype)
+colnames(M3.factor) <- "Subtype"
+which.max(table(M3.factor$Subtype))
+M3.factor$Subtype <- as.factor(M3.factor$Subtype)
+M3.factor$Subtype <- with(M3.factor, relevel(Subtype, ref="TAL1_DP_like"))
+M3.factor.original <- as.data.frame(as.factor(M3.subtype.factor$Reviewed.subtype))
+colnames(M3.factor.original) <- c("Subtype")
+M3.factor.original$Subtype <- with(M3.factor.original, relevel(Subtype, ref="TAL1 DP-like"))
+M3.data <- cbind.data.frame(annot$EFS, annot$status, M3.factor)
+colnames(M3.data)[1:2] <- c("time", "status")
+```
+
+
+```{r}
+Subtype.tab <- table(M3.factor$Subtype, annot$status)
+Subtype.tab
+```
+
+
+## Relapse
+
+```{r}
+M3.dataf <- cbind.data.frame(annot$EFS, annot$status, M3.factor$Subtype)
+colnames(M3.dataf) <- c("time", "status", "Subtype")
+tidycmprsk::crr(Surv(time, status)~Subtype, data=M3.dataf) %>% tbl_regression(exp=TRUE)
+```
+
+```{r}
+M3.dataf.SPI1 <- M3.dataf[which(M3.dataf$Subtype=="SPI1"),]
+table(M3.dataf.SPI1$time, M3.dataf.SPI1$status)
+```
+
+
+
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ Subtype, M3.dataf) %>%
+  ggcuminc() 
+#  add_confidence_interval() +
+#  add_risktable()
+```
+
+```{r}
+fit <- tidycmprsk::crr(Surv(time, status)~Subtype, data=M3.dataf)
+fit$tidy$MolecularFeatureOld <- levels(M3.factor.original$Subtype)[2:17]
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit$tidy, file="M3Relapse_CR_2023-07-17.csv", row.names = FALSE)
+```
+
+
+```{r}
+Subtype.Rel3 <- rownames(Subtype.tab[which(Subtype.tab[,2]>=3),])
+M3.dataf.rel <- M3.dataf[which(M3.dataf$Subtype %in% Subtype.Rel3),]
+fit <- tidycmprsk::crr(Surv(time, status)~Subtype, data=M3.dataf.rel)
+#fit$tidy$MolecularFeatureOld <- levels(M3.factor.original$Subtype)[2:17]
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit$tidy, file="M3Relapse_AtLeast3_CR_2023-07-27.csv", row.names = FALSE)
+```
+
+```{r}
+create_forestplot(est=fit$tidy$estimate, lowerci=fit$tidy$conf.low, upperci=fit$tidy$conf.high, p=fit$tidy$p.value,
+                  MolecularFeature = fit$tidy$term, feat.name="Subtype", title.name="Relapse as Event of Interest")
+```
+
+```{r, eval=FALSE}
+sub.tab <- as.data.frame(table(M3.dataf$Subtype, M3.dataf$status))
+sub.zero <- sub.tab[which(sub.tab$Freq==0),]
+sub.zero.rel <- sub.zero[which(sub.zero$Var2==1),]
+sub.zero.rel$Var1
+```
+
+```{r, eval=FALSE}
+tidy.sm <- fit$tidy[-which(fit$tidy$term %in% paste0("Subtype", as.character(sub.zero.rel$Var1))),]
+```
+
+```{r, eval=FALSE}
+create_forestplot(est=tidy.sm$estimate, lowerci=tidy.sm$conf.low, upperci=tidy.sm$conf.high, p=tidy.sm$p.value,
+                  MolecularFeature = tidy.sm$MolecularFeatureOld, feat.name="Subtype", title.name="Relapse as Event of Interest")
+```
+
+## Relapse + MRD
+
+```{r}
+M3.datafm <- cbind.data.frame(annot$EFS, annot$status, M3.factor$Subtype, annot$MRD.ord)
+colnames(M3.datafm) <- c("time", "status", "Subtype", "MRD")
+tidycmprsk::crr(Surv(time, status)~Subtype + MRD, data=M3.datafm) %>% tbl_regression(exp=TRUE)
+```
+
+```{r}
+fitm <- tidycmprsk::crr(Surv(time, status)~Subtype+MRD, data=M3.datafm)
+#fitm$tidy$MolecularFeatureOld <- levels(M3.factor.original$Subtype)[2:17]
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fitm$tidy, file="M3RelapseMRD_CR_2023-07-17.csv", row.names = FALSE)
+```
+
+```{r}
+M3.datafm.rel <- M3.datafm[which(M3.datafm$Subtype %in% Subtype.Rel3),]
+fitm <- tidycmprsk::crr(Surv(time, status)~Subtype+MRD, data=M3.datafm.rel)
+#fitm$tidy$MolecularFeatureOld <- levels(M3.factor.original$Subtype)[2:17]
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fitm$tidy, file="M3RelapseMRD_AtLeast3_CR_2023-07-27.csv", row.names = FALSE)
+```
+
+```{r}
+create_forestplot(est=fitm$tidy$estimate, lowerci=fitm$tidy$conf.low, upperci=fitm$tidy$conf.high, p=fitm$tidy$p.value,
+                  MolecularFeature = fitm$tidy$term, feat.name="Subtype/MRD", title.name="Relapse as Event of Interest")
+```
+
+
+```{r, eval=FALSE}
+tidy.sm <- fitm$tidy[-which(fitm$tidy$term %in% paste0("Subtype", as.character(sub.zero.rel$Var1))),]
+```
+
+```{r, eval=FALSE}
+create_forestplot(est=tidy.sm$estimate, lowerci=tidy.sm$conf.low, upperci=tidy.sm$conf.high, p=tidy.sm$p.value,
+                  MolecularFeature = tidy.sm$term, feat.name="Subtype/MRD", title.name="Relapse as Event of Interest")
+```
+
+## Toxic Death
+
+```{r}
+tidycmprsk::crr(Surv(time, status)~Subtype, data=M3.dataf, failcode=2) %>% tbl_regression(exp=TRUE)
+```
+
+```{r}
+fit2 <- tidycmprsk::crr(Surv(time, status)~Subtype, data=M3.dataf, failcode=2)
+fit2$tidy$MolecularFeatureOld <- levels(M3.factor.original$Subtype)[2:17]
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit2$tidy, file="M3Toxic_CR_2023-07-17.csv", row.names = FALSE)
+```
+
+
+```{r}
+Subtype.TD3 <- rownames(Subtype.tab[which(Subtype.tab[,3]>=3),])
+M3.dataf.td <- M3.dataf[which(M3.dataf$Subtype %in% Subtype.TD3),]
+fit2 <- tidycmprsk::crr(Surv(time, status)~Subtype, data=M3.dataf.td, failcode=2)
+#fit2$tidy$MolecularFeatureOld <- levels(M3.factor.original$Subtype)[2:17]
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit2$tidy, file="M3Toxic_AtLeast3_CR_2023-07-27.csv", row.names = FALSE)
+```
+
+
+```{r}
+create_forestplot(est=fit2$tidy$estimate, lowerci=fit2$tidy$conf.low, upperci=fit2$tidy$conf.high, p=fit2$tidy$p.value,
+                  MolecularFeature = substring(fit2$tidy$term, 8), feat.name="Subtype", title.name="Toxic Death as Event of Interest")
+```
+
+```{r, eval=FALSE}
+sub.zero.tox <- sub.zero[which(sub.zero$Var2==2),]
+sub.zero.tox$Var1
+```
+
+```{r, eval=FALSE}
+tidy.sm <- fit2$tidy[-which(fit2$tidy$term %in% paste0("Subtype", as.character(sub.zero.tox$Var1))),]
+```
+
+```{r, eval=FALSE}
+create_forestplot(est=tidy.sm$estimate, lowerci=tidy.sm$conf.low, upperci=tidy.sm$conf.high, p=tidy.sm$p.value,
+                  MolecularFeature = tidy.sm$MolecularFeatureOld, feat.name="Subtype", title.name="Toxic Death as Event of Interest")
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ Subtype, M3.dataf, failcode=2) %>%
+  ggcuminc(outcome="2") 
+#  add_confidence_interval() +
+#  add_risktable()
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ Subtype, M3.dataf.td, failcode=2) %>%
+  ggcuminc(outcome="2") 
+#  add_confidence_interval() +
+#  add_risktable()
+```
+
+
+## Secondary Malignant Neoplasm
+
+```{r}
+tidycmprsk::crr(Surv(time, status)~Subtype, data=M3.dataf, failcode=3) %>% tbl_regression(exp=TRUE)
+```
+
+
+```{r}
+fit3 <- tidycmprsk::crr(Surv(time, status)~Subtype, data=M3.dataf, failcode=3)
+fit3$tidy$MolecularFeatureOld <- levels(M3.factor.original$Subtype)[2:17]
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit3$tidy, file="M3SecCan_CR_2023-07-17.csv", row.names = FALSE)
+```
+
+```{r}
+Subtype.SC3 <- rownames(Subtype.tab[which(Subtype.tab[,4]>=3),])
+M3.dataf.sc <- M3.dataf[which(M3.dataf$Subtype %in% Subtype.SC3),]
+fit3 <- tidycmprsk::crr(Surv(time, status)~Subtype, data=M3.dataf.sc, failcode=3)
+#fit3$tidy$MolecularFeatureOld <- levels(M3.factor.original$Subtype)[2:17]
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit3$tidy, file="M3SecCan_AtLeast3_CR_2023-07-27.csv", row.names = FALSE)
+```
+
+```{r}
+create_forestplot(est=fit3$tidy$estimate, lowerci=fit3$tidy$conf.low, upperci=fit3$tidy$conf.high, p=fit3$tidy$p.value,
+                  MolecularFeature = fit3$tidy$term, feat.name="Subtype", title.name="Secondary Cancer as Event of Interest")
+```
+
+```{r, eval=FALSE}
+sub.zero.sec <- sub.zero[which(sub.zero$Var2==3),]
+sub.zero.sec$Var1
+```
+
+```{r, eval=FALSE}
+tidy.sm <- fit3$tidy[-which(fit3$tidy$term %in% paste0("Subtype", as.character(sub.zero.sec$Var1))),]
+```
+
+```{r, eval=FALSE}
+create_forestplot(est=tidy.sm$estimate, lowerci=tidy.sm$conf.low, upperci=tidy.sm$conf.high, p=tidy.sm$p.value,
+                  MolecularFeature = tidy.sm$MolecularFeatureOld, feat.name="Subtype", title.name="Secondary Cancer as Event of Interest")
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ Subtype, M3.dataf, failcode=3) %>%
+  ggcuminc(outcome="3") 
+#  add_confidence_interval() +
+#  add_risktable()
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ Subtype, M3.dataf.sc, failcode=3) %>%
+  ggcuminc(outcome="3") 
+#  add_confidence_interval() +
+#  add_risktable()
+```
+
+```{r}
+M3.dataf.SPI1 <- M3.dataf[which(M3.dataf$Subtype=="SPI1"),]
+table(M3.dataf.SPI1$status)
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ 1, M3.dataf.SPI1) %>%
+  ggcuminc(outcome = c("1", "2", "3"), theme=list(theme_classic())) +
+  add_risktable()
+```
+
+```{r}
+M3.dataf.TLX3 <- M3.dataf[which(M3.dataf$Subtype=="TLX3"),]
+cuminc(Surv(time, status) ~ 1, M3.dataf.TLX3) %>%
+  ggcuminc(outcome = c("1", "2", "3"), theme=list(theme_classic())) +
+  add_risktable()
+```
+
+```{r}
+# Gray's test for SPI1 compare to other groups
+M3.dataf$SPI1 <- as.factor(ifelse(M3.dataf$Subtype=="SPI1", "SPI1", "Other"))
+cmprsk::cuminc(M3.dataf$time, M3.dataf$status, group=M3.dataf$SPI1)
+```
+
+
+# M3: Subsubtype
+
+Note that these are not treated as factors so HR is specific subsubtype vs. all other subsubtypes.
+
+```{r}
+M3.Data <- M3.subsubtype
+M3.Data2 <- janitor::clean_names(M3.Data)
+rownames(M3.Data2) <- rownames(M3.Data)
+M3.dataf <- cbind.data.frame(annot$EFS, annot$status, M3.Data)
+colnames(M3.dataf)[1:2] <- c("time", "status")
+```
+
+```{r}
+M3.rel.vec <- colSums(M3.dataf[which(M3.dataf$status==1),-c(1,2)])
+M3.rel.vec
+M3.td.vec <- colSums(M3.dataf[which(M3.dataf$status==2),-c(1,2)])
+M3.td.vec
+M3.sc.vec <- colSums(M3.dataf[which(M3.dataf$status==3),-c(1,2)])
+M3.sc.vec
+```
+
+```{r}
+M3.dataf.0 <- M3.dataf[which(M3.dataf$status==0),]
+col.sum.0 <-colSums(M3.dataf.0[,-c(1,2)], na.rm=T) 
+M3.dataf.1 <- M3.dataf[which(M3.dataf$status==1),]
+col.sum.1 <-colSums(M3.dataf.1[,-c(1,2)], na.rm=T) 
+M3.dataf.2 <- M3.dataf[which(M3.dataf$status==2),]
+col.sum.2 <-colSums(M3.dataf.2[,-c(1,2)], na.rm=T) 
+M3.dataf.3 <- M3.dataf[which(M3.dataf$status==3),]
+col.sum.3 <-colSums(M3.dataf.3[,-c(1,2)], na.rm=T) 
+df <- cbind.data.frame(col.sum.0, col.sum.1, col.sum.2, col.sum.3)
+colnames(df) <- c("Censored", "Relapse", "Toxic Death", "Second Cancer")
+df
+Subsub.Tab <- df
+```
+
+
+## Relapse
+
+```{r}
+tidycmprsk::crr(Surv(time, status)~., data=M3.dataf) %>% tbl_regression(exp=TRUE)
+```
+
+
+
+```{r}
+fit <- tidycmprsk::crr(Surv(time, status)~., data=M3.dataf)
+fit$tidy$MolecularFeatureOld <- colnames(M3.subsubtype)
+```
+
+```{r}
+setwd(res.dir)
+write.csv(fit$tidy, file="M3SubSubtype_Relapse_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+```{r}
+Subsub.Rel3 <- names(M3.rel.vec[which(M3.rel.vec>=3)])
+M3.dataf.rel <- M3.dataf[,c(1,2,which(colnames(M3.dataf)%in%Subsub.Rel3))]
+fit <- tidycmprsk::crr(Surv(time, status)~., data=M3.dataf.rel)
+#fit$tidy$MolecularFeatureOld <- colnames(M3.subsubtype)
+```
+
+```{r}
+setwd(res.dir)
+write.csv(fit$tidy, file="M3SubSubtype_Relapse_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+
+```{r, fig.height=5, fig.width=7}
+create_forestplot(est=fit$tidy$estimate, lowerci=fit$tidy$conf.low, upperci=fit$tidy$conf.high, p=fit$tidy$p.value,
+                  MolecularFeature = fit$tidy$term, feat.name="Subsubtype", title.name="Relapse as Event of Interest")
+```
+
+```{r, fig.height=5, fig.width=7, eval=FALSE}
+subsub.zero <- rownames(df[which(df$Relapse==0),])
+tidy.sm <- fit$tidy
+tidy.sm <- tidy.sm[-which(tidy.sm$MolecularFeatureOld %in% subsub.zero),]
+create_forestplot(est=tidy.sm$estimate, lowerci=tidy.sm$conf.low, upperci=tidy.sm$conf.high, p=tidy.sm$p.value,
+                  MolecularFeature = tidy.sm$MolecularFeatureOld, feat.name="Subsubtype", title.name="Relapse as Event of Interest")
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ 1, M3.dataf[which(M3.dataf$`Other ETP-like`==1),]) %>%
+  ggcuminc(outcome = c("1", "2", "3"), theme=list(theme_classic())) +
+  add_risktable()
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ `Other ETP-like`, M3.dataf) %>%
+  ggcuminc(outcome = c("1", "2", "3"), theme=list(theme_classic())) +
+  add_risktable()
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ `Other ETP-like`, M3.dataf) %>%
+  ggcuminc(outcome = c("1"), theme=list(theme_classic())) +
+  add_risktable() + add_legend_title("Other ETP-like (1) vs. Not (0)") + labs(title="Cumulative Incidence of Relapse")
+```
+
+## Relapse + MRD
+
+```{r}
+M3.datafm <- cbind.data.frame(annot$EFS, annot$status, annot$MRD.ord, M3.Data)
+colnames(M3.datafm)[1:3] <- c("time", "status", "MRD")
+```
+
+
+```{r}
+tidycmprsk::crr(Surv(time, status)~., data=M3.datafm) %>% tbl_regression(exp=TRUE)
+```
+
+```{r}
+fitm <- tidycmprsk::crr(Surv(time, status)~., data=M3.datafm)
+```
+
+
+```{r}
+setwd(res.dir)
+write.csv(fitm$tidy, file="M3SubSubtype_RelapseMRD_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+```{r}
+M3.datafm.rel <- M3.datafm[,c(1,2,3,which(colnames(M3.datafm)%in%Subsub.Rel3))]
+fitm <- tidycmprsk::crr(Surv(time, status)~., data=M3.datafm.rel)
+```
+
+```{r}
+setwd(res.dir)
+write.csv(fitm$tidy, file="M3SubSubtype_RelapseMRD_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+```{r, fig.height=5, fig.width=7}
+create_forestplot(est=fitm$tidy$estimate, lowerci=fitm$tidy$conf.low, upperci=fitm$tidy$conf.high, p=fitm$tidy$p.value,
+                  MolecularFeature = fitm$tidy$term, feat.name="Subsubtype/MRD", title.name="Relapse as Event of Interest")
+```
+
+
+
+## Toxic Death
+
+
+```{r}
+tidycmprsk::crr(Surv(time, status)~., data=M3.dataf, failcode=2) %>% tbl_regression(exp=TRUE)
+```
+
+
+```{r}
+fit2 <- tidycmprsk::crr(Surv(time, status)~., data=M3.dataf, failcode=2)
+fit2$tidy$MolecularFeatureOld <- colnames(M3.subsubtype)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit2$tidy, file="M3Subsubtype_Toxic_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+```{r}
+Subsub.TD3 <- names(M3.td.vec[which(M3.td.vec>=3)])
+M3.dataf.td <- M3.dataf[,c(1,2,which(colnames(M3.dataf)%in%Subsub.TD3))]
+fit2 <- tidycmprsk::crr(Surv(time, status)~., data=M3.dataf.td, failcode=2)
+#fit2$tidy$MolecularFeatureOld <- colnames(M3.subsubtype)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit2$tidy, file="M3Subsubtype_Toxic_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+```{r, fig.height=5, fig.width=7}
+create_forestplot(est=fit2$tidy$estimate, lowerci=fit2$tidy$conf.low, upperci=fit2$tidy$conf.high, p=fit2$tidy$p.value,
+                  MolecularFeature = fit2$tidy$term, feat.name="Pathway", title.name="Toxic Death as Event of Interest")
+```
+
+```{r, fig.height=5, fig.width=7, eval=FALSE}
+subsub.zero <- rownames(df[which(df$`Toxic Death`==0),])
+tidy.sm <- fit2$tidy
+tidy.sm <- tidy.sm[-which(tidy.sm$MolecularFeatureOld %in% subsub.zero),]
+create_forestplot(est=tidy.sm$estimate, lowerci=tidy.sm$conf.low, upperci=tidy.sm$conf.high, p=tidy.sm$p.value,
+                  MolecularFeature = tidy.sm$MolecularFeatureOld, feat.name="Subsubtype", title.name="Toxic Death as Event of Interest")
+```
+
+
+## Second Cancer
+
+```{r}
+tidycmprsk::crr(Surv(time, status)~., data=M3.dataf, failcode=3) %>% tbl_regression(exp=TRUE)
+```
+
+
+```{r}
+fit3 <- tidycmprsk::crr(Surv(time, status)~., data=M3.dataf, failcode=3)
+fit3$tidy$MolecularFeatureOld <- colnames(M3.subsubtype)
+```
+
+```{r}
+setwd(res.dir)
+write.csv(fit3$tidy, file="M3Subsubtype_SecCan_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+```{r}
+Subsub.SC3 <- names(M3.td.vec[which(M3.sc.vec>=3)])
+M3.dataf.sc <- M3.dataf[,c(1,2,which(colnames(M3.dataf)%in%Subsub.SC3))]
+fit3 <- tidycmprsk::crr(Surv(time, status)~., data=M3.dataf.sc, failcode=2)
+```
+
+```{r}
+setwd(res.dir)
+write.csv(fit3$tidy, file="M3Subsubtype_SecCan_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+```{r}
+fit3$tidy
+```
+
+
+```{r, fig.height=5, fig.width=7, eval=FALSE}
+create_forestplot(est=fit3$tidy$estimate, lowerci=fit3$tidy$conf.low, upperci=fit3$tidy$conf.high, p=fit3$tidy$p.value,
+                  MolecularFeature = fit3$tidy$term, feat.name="Pathway", title.name="Second Cancer as Event of Interest")
+```
+
+
+```{r, fig.height=5, fig.width=7, eval=FALSE}
+subsub.zero <- rownames(df[which(df$`Second Cancer`==0),])
+tidy.sm <- fit3$tidy
+tidy.sm <- tidy.sm[-which(tidy.sm$MolecularFeatureOld %in% subsub.zero),]
+create_forestplot(est=tidy.sm$estimate, lowerci=tidy.sm$conf.low, upperci=tidy.sm$conf.high, p=tidy.sm$p.value,
+                  MolecularFeature = tidy.sm$MolecularFeatureOld, feat.name="Subsubtype", title.name="Second Cancer as Event of Interest")
+```
+
+
+# M3: Genetic Subtype
+
+```{r}
+M3.Data <- M3.genetic.subtype
+M3.Data2 <- janitor::clean_names(M3.Data)
+rownames(M3.Data2) <- rownames(M3.Data)
+M3.dataf <- cbind.data.frame(annot$EFS, annot$status, M3.Data)
+colnames(M3.dataf)[1:2] <- c("time", "status")
+```
+
+```{r}
+M3.rel.vec <- colSums(M3.dataf[which(M3.dataf$status==1),-c(1,2)])
+M3.rel.vec
+M3.td.vec <- colSums(M3.dataf[which(M3.dataf$status==2),-c(1,2)])
+M3.td.vec
+M3.sc.vec <- colSums(M3.dataf[which(M3.dataf$status==3),-c(1,2)])
+M3.sc.vec
+```
+
+```{r}
+M3.dataf.0 <- M3.dataf[which(M3.dataf$status==0),]
+col.sum.0 <-colSums(M3.dataf.0[,-c(1,2)], na.rm=T) 
+M3.dataf.1 <- M3.dataf[which(M3.dataf$status==1),]
+col.sum.1 <-colSums(M3.dataf.1[,-c(1,2)], na.rm=T) 
+M3.dataf.2 <- M3.dataf[which(M3.dataf$status==2),]
+col.sum.2 <-colSums(M3.dataf.2[,-c(1,2)], na.rm=T) 
+M3.dataf.3 <- M3.dataf[which(M3.dataf$status==3),]
+col.sum.3 <-colSums(M3.dataf.3[,-c(1,2)], na.rm=T) 
+df <- cbind.data.frame(col.sum.0, col.sum.1, col.sum.2, col.sum.3)
+colnames(df) <- c("Censored", "Relapse", "Toxic Death", "Second Cancer")
+df
+GenSub.Tab <- df
+```
+
+## Relapse
+
+```{r}
+tidycmprsk::crr(Surv(time, status)~., data=M3.dataf) %>% tbl_regression(exp=TRUE)
+```
+
+
+
+```{r}
+fit <- tidycmprsk::crr(Surv(time, status)~., data=M3.dataf)
+fit$tidy$MolecularFeatureOld <- colnames(M3.genetic.subtype)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit$tidy, file="M3GenSubtype_Relapse_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+```{r}
+Gensub.Rel3 <- names(M3.rel.vec[which(M3.rel.vec>=3)])
+M3.dataf.rel <- M3.dataf[,c(1,2,which(colnames(M3.dataf)%in%Gensub.Rel3))]
+fit <- tidycmprsk::crr(Surv(time, status)~., data=M3.dataf.rel)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit$tidy, file="M3GenSubtype_Relapse_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+```{r, fig.height=5, fig.width=7}
+create_forestplot(est=fit$tidy$estimate, lowerci=fit$tidy$conf.low, upperci=fit$tidy$conf.high, p=fit$tidy$p.value,
+                  MolecularFeature = fit$tidy$term, feat.name="Genetic Subtype", title.name="Relapse as Event of Interest")
+```
+
+
+```{r, fig.height=5, fig.width=7, eval=FALSE}
+subsub.zero <- rownames(df[which(df$Relapse==0),])
+tidy.sm <- fit$tidy
+tidy.sm <- tidy.sm[-which(tidy.sm$MolecularFeatureOld %in% subsub.zero),]
+create_forestplot(est=tidy.sm$estimate, lowerci=tidy.sm$conf.low, upperci=tidy.sm$conf.high, p=tidy.sm$p.value,
+                  MolecularFeature = tidy.sm$MolecularFeatureOld, feat.name="Genetic Subtype", title.name="Relapse as Event of Interest")
+```
+
+
+```{r}
+M3.dataf.rn <- janitor::clean_names(M3.dataf)
+```
+
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ 1, M3.dataf.rn[which(M3.dataf.rn$b_samp_genetic_subtype_tal1_dp_like_other==1),]) %>%
+  ggcuminc(outcome = c("1", "2", "3"), theme=list(theme_classic())) +
+  add_risktable()
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ b_samp_genetic_subtype_tal1_dp_like_other, M3.dataf.rn) %>%
+  ggcuminc(outcome = c("1", "2", "3"), theme=list(theme_classic())) +
+  add_risktable()
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ b_samp_genetic_subtype_tal1_dp_like_other, M3.dataf.rn) %>%
+  ggcuminc(outcome = c("1"), theme=list(theme_classic())) +
+  add_risktable() + add_legend_title("B:SAMP:genetic_subtype_TAL1 DP-like Other (1) vs. Not (0)") + labs(title="Cumulative Incidence of Relapse")
+```
+
+### Gray's Test pairwise comparison
+
+```{r}
+M3.dataf.TAL <- M3.dataf[,c(1,2,grep("TAL", colnames(M3.dataf)))]
+M3.dataf.TAL.f <- M3.dataf.TAL[-which(rowSums(M3.dataf.TAL[,-c(1,2)])==0),]
+M3.dataf.TAL.l <- pivot_longer(M3.dataf.TAL.f, cols=c(3:9), names_to="Group", values_to="Indicator")
+M3.dataf.TAL.lf <- M3.dataf.TAL.l[which(M3.dataf.TAL.l$Indicator==1),]
+```
+
+
+The cumulative incidence plots for the TAL1 genetic subtypes are intriguing but don't significantly differ from one another (P=0.093, Gray's Test). 
+
+```{r}
+library(cmprsk)
+cmprsk::cuminc(M3.dataf.TAL.lf$time, M3.dataf.TAL.lf$status, group=M3.dataf.TAL.lf$Group)
+```
+
+I ran the pairwise tests out of curiousity, but none of them reached signficiance which was expected when the global test failed to reach significance. Don't report these results. 
+
+```{r}
+table(M3.dataf.TAL.lf$Group)
+x <- levels(as.factor(M3.dataf.TAL.lf$Group))
+#apply(combn(x,2),2,paste,collapse=",")
+#apply(combn(x,2),2)
+#class(combn(x,2))
+comb2levs <- combn(x,2)
+```
+
+```{r}
+M3.dataf.TAL.temp <- M3.dataf.TAL.lf[which(M3.dataf.TAL.lf$Group %in% comb2levs[,1]),]
+ccfit <- cmprsk::cuminc(M3.dataf.TAL.temp$time, M3.dataf.TAL.temp$status, group=M3.dataf.TAL.temp$Group)
+ccfit$Tests[1,]
+```
+
+```{r}
+test.list <- list()
+rel.test.df <- data.frame()
+for(i in 1:ncol(comb2levs)){
+  M3.dataf.TAL.temp <- M3.dataf.TAL.lf[which(M3.dataf.TAL.lf$Group %in% comb2levs[,i]),]
+  ccfit <- cmprsk::cuminc(M3.dataf.TAL.temp$time, M3.dataf.TAL.temp$status, group=M3.dataf.TAL.temp$Group)
+  test.list[[i]] <- ccfit$Tests
+  rel.test <- c(ccfit$Tests[1,], levels(as.factor(M3.dataf.TAL.temp$Group))[1], levels(as.factor(M3.dataf.TAL.temp$Group))[2])
+  names(rel.test) <- c("stat", "pv", "df", "Subtype1", "Subtype2")
+  rel.test.df <- rbind.data.frame(rel.test.df, rel.test)
+}
+colnames(rel.test.df) <- c("stat", "p", "df", "Subtype1", "Subtype2")
+rel.test.df$HolmP <- p.adjust(rel.test.df$p, method="holm")
+rel.test.df
+```
+
+
+
+## Relapse + MRD
+
+```{r}
+M3.datafm <- cbind.data.frame(annot$EFS, annot$status, annot$MRD.ord, M3.Data)
+colnames(M3.datafm)[1:3] <- c("time", "status", "MRD")
+```
+
+
+```{r}
+tidycmprsk::crr(Surv(time, status)~., data=M3.datafm) %>% tbl_regression(exp=TRUE)
+```
+
+```{r}
+fitm <- tidycmprsk::crr(Surv(time, status)~., data=M3.datafm)
+```
+
+
+```{r}
+setwd(res.dir)
+write.csv(fitm$tidy, file="M3GenSubtype_RelapseMRD_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+
+```{r}
+M3.datafm.rel <- M3.datafm[,c(1,2,3,which(colnames(M3.datafm)%in%Gensub.Rel3))]
+fitm <- tidycmprsk::crr(Surv(time, status)~., data=M3.datafm.rel)
+```
+
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fitm$tidy, file="M3GenSubtype_RelapseMRD_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+```{r}
+create_forestplot(est=fitm$tidy$estimate, lowerci=fitm$tidy$conf.low, upperci=fitm$tidy$conf.high, p=fitm$tidy$p.value,
+                  MolecularFeature = fitm$tidy$term, feat.name="Genetic Subtype/MRD", title.name="Relapse as Event of Interest")
+```
+
+## Toxic Death
+
+
+```{r}
+tidycmprsk::crr(Surv(time, status)~., data=M3.dataf, failcode=2) %>% tbl_regression(exp=TRUE)
+```
+
+
+```{r}
+fit2 <- tidycmprsk::crr(Surv(time, status)~., data=M3.dataf, failcode=2)
+fit2$tidy$MolecularFeatureOld <- colnames(M3.genetic.subtype)
+```
+
+```{r}
+setwd(res.dir)
+write.csv(fit2$tidy, file="M3GenSubtype_Toxic_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+```{r}
+GenSub.TD3 <- names(M3.td.vec[which(M3.td.vec>=3)])
+M3.dataf.td <- M3.dataf[,c(1,2,which(colnames(M3.dataf)%in%GenSub.TD3))]
+fit2 <- tidycmprsk::crr(Surv(time, status)~., data=M3.dataf.td, failcode=2)
+```
+
+```{r}
+setwd(res.dir)
+write.csv(fit2$tidy, file="M3GenSubtype_Toxic_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+```{r}
+fit2$tidy
+```
+
+
+```{r, eval=FALSE}
+create_forestplot(est=fit2$tidy$estimate, lowerci=fit2$tidy$conf.low, upperci=fit2$tidy$conf.high, p=fit2$tidy$p.value,
+                  MolecularFeature = fit2$tidy$term, feat.name="Genetic Subtype", title.name="Toxic Death as Event of Interest")
+```
+
+```{r, fig.height=5, fig.width=7, eval=FALSE}
+subsub.zero <- rownames(df[which(df$`Toxic Death`==0),])
+tidy.sm <- fit2$tidy
+tidy.sm <- tidy.sm[-which(tidy.sm$MolecularFeatureOld %in% subsub.zero),]
+create_forestplot(est=tidy.sm$estimate, lowerci=tidy.sm$conf.low, upperci=tidy.sm$conf.high, p=tidy.sm$p.value,
+                  MolecularFeature = tidy.sm$MolecularFeatureOld, feat.name="Genetic Subtype", title.name="Toxic Death as Event of Interest")
+```
+
+## Second Cancer
+
+```{r}
+tidycmprsk::crr(Surv(time, status)~., data=M3.dataf, failcode=3) %>% tbl_regression(exp=TRUE)
+```
+
+
+```{r}
+fit3 <- tidycmprsk::crr(Surv(time, status)~., data=M3.dataf, failcode=3)
+fit3$tidy$MolecularFeatureOld <- colnames(M3.genetic.subtype)
+```
+
+```{r}
+setwd(res.dir)
+write.csv(fit3$tidy, file="M3GenSubtype_SecCan_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+
+```{r}
+GenSub.SC3 <- names(M3.sc.vec[which(M3.sc.vec>=3)])
+M3.dataf.sc <- M3.dataf[,c(1,2,which(colnames(M3.dataf)%in%GenSub.SC3))]
+fit3 <- tidycmprsk::crr(Surv(time, status)~., data=M3.dataf.sc, failcode=3)
+#fit3$tidy$MolecularFeatureOld <- colnames(M3.genetic.subtype)
+```
+
+```{r}
+setwd(res.dir)
+write.csv(fit3$tidy, file="M3GenSubtype_SecCan_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+```{r}
+fit3$tidy
+```
+
+
+
+```{r, fig.height=5, fig.width=7, eval=FALSE}
+create_forestplot(est=fit3$tidy$estimate, lowerci=fit3$tidy$conf.low, upperci=fit3$tidy$conf.high, p=fit3$tidy$p.value,
+                  MolecularFeature = fit3$tidy$term, feat.name="Genetic Subtype", title.name="Second Cancer as Event of Interest")
+```
+
+
+```{r, fig.height=5, fig.width=7, eval=FALSE}
+subsub.zero <- rownames(df[which(df$`Second Cancer`==0),])
+tidy.sm <- fit3$tidy
+tidy.sm <- tidy.sm[-which(tidy.sm$MolecularFeatureOld %in% subsub.zero),]
+create_forestplot(est=tidy.sm$estimate, lowerci=tidy.sm$conf.low, upperci=tidy.sm$conf.high, p=tidy.sm$p.value,
+                  MolecularFeature = tidy.sm$MolecularFeatureOld, feat.name="Genetic Subtype", title.name="Second Cancer as Event of Interest")
+```
+
+
+# M4: Pathways
+
+```{r}
+M4.Data <- M4.pathway
+colnames(M4.Data) <- gsub(":.*", "", colnames(M4.pathway))
+M4.dataf <- cbind.data.frame(annot$EFS, annot$status, M4.Data)
+colnames(M4.dataf)[1:2] <- c("time", "status")
+```
+
+```{r}
+M4.rel.vec <- colSums(M4.dataf[which(M4.dataf$status==1),-c(1,2)])
+M4.rel.vec
+M4.td.vec <- colSums(M4.dataf[which(M4.dataf$status==2),-c(1,2)])
+M4.td.vec
+M4.sc.vec <- colSums(M4.dataf[which(M4.dataf$status==3),-c(1,2)])
+M4.sc.vec
+```
+
+
+```{r}
+M4.dataf.0 <- M4.dataf[which(M4.dataf$status==0),]
+col.sum.0 <-colSums(M4.dataf.0[,-c(1,2)], na.rm=T) 
+M4.dataf.1 <- M4.dataf[which(M4.dataf$status==1),]
+col.sum.1 <-colSums(M4.dataf.1[,-c(1,2)], na.rm=T) 
+M4.dataf.2 <- M4.dataf[which(M4.dataf$status==2),]
+col.sum.2 <-colSums(M4.dataf.2[,-c(1,2)], na.rm=T) 
+M4.dataf.3 <- M4.dataf[which(M4.dataf$status==3),]
+col.sum.3 <-colSums(M4.dataf.3[,-c(1,2)], na.rm=T) 
+df <- cbind.data.frame(col.sum.0, col.sum.1, col.sum.2, col.sum.3)
+colnames(df) <- c("Censored", "Relapse", "Toxic Death", "Second Cancer")
+df
+Pathway.Tab <- df
+```
+
+## Relapse
+
+```{r}
+tidycmprsk::crr(Surv(time, status)~., data=M4.dataf) %>% tbl_regression(exp=TRUE)
+```
+
+
+```{r}
+fit <- tidycmprsk::crr(Surv(time, status)~., data=M4.dataf)
+fit$tidy$MolecularFeatureOld <- colnames(M4.pathway)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit$tidy, file="M4Relapse_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+```{r}
+Path.Rel3 <- names(M4.rel.vec[which(M4.rel.vec>=3)])
+M4.dataf.rel <- M4.dataf[,c(1,2,which(colnames(M4.dataf)%in%Path.Rel3))]
+fit <- tidycmprsk::crr(Surv(time, status)~., data=M4.dataf.rel)
+#fit$tidy$MolecularFeatureOld <- colnames(M4.pathway)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit$tidy, file="M4Relapse_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+
+```{r}
+create_forestplot(est=fit$tidy$estimate, lowerci=fit$tidy$conf.low, upperci=fit$tidy$conf.high, p=fit$tidy$p.value,
+                  MolecularFeature = fit$tidy$term, feat.name="Pathway", title.name="Relapse as Event of Interest")
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ 1, M4.dataf[which(M4.dataf$PI3K_Pathway==1),]) %>%
+  ggcuminc(outcome = c("1", "2", "3"), theme=list(theme_classic())) +
+  add_risktable()
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ PI3K_Pathway, M4.dataf) %>%
+  ggcuminc(outcome = c("1", "2", "3"), theme=list(theme_classic())) +
+  add_risktable()
+```
+
+```{r}
+tidycmprsk::cuminc(Surv(time, status) ~ PI3K_Pathway, M4.dataf) %>%
+  ggcuminc(outcome = c("1"), theme=list(theme_classic())) +
+  add_risktable() + add_legend_title("PI3K Pathway (1) vs. Not (0)") + labs(title="Cumulative Incidence of Relapse")
+```
+
+## Relapse + MRD
+
+```{r}
+M4.datafm <- cbind.data.frame(annot$EFS, annot$status, annot$MRD.ord, M4.Data)
+colnames(M4.datafm)[1:3] <- c("time", "status", "MRD")
+```
+
+
+```{r}
+tidycmprsk::crr(Surv(time, status)~., data=M4.datafm) %>% tbl_regression(exp=TRUE)
+```
+
+```{r}
+fitm <- tidycmprsk::crr(Surv(time, status)~., data=M4.datafm)
+```
+
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fitm$tidy, file="M4RelapseMRD_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+```{r}
+M4.datafm.rel <- M4.datafm[,c(1,2,3,which(colnames(M4.datafm)%in%Path.Rel3))]
+fitm <- tidycmprsk::crr(Surv(time, status)~., data=M4.datafm.rel)
+```
+
+
+```{r}
+setwd(res.dir)
+write.csv(fitm$tidy, file="M4RelapseMRD_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+
+```{r, fig.height=5, fig.width=7}
+create_forestplot(est=fitm$tidy$estimate, lowerci=fitm$tidy$conf.low, upperci=fitm$tidy$conf.high, p=fitm$tidy$p.value,
+                  MolecularFeature = fitm$tidy$term, feat.name="Pathway/MRD", title.name="Relapse as Event of Interest")
+```
+
+## Toxic Death
+
+
+```{r}
+tidycmprsk::crr(Surv(time, status)~., data=M4.dataf, failcode=2) %>% tbl_regression(exp=TRUE)
+```
+
+
+```{r}
+fit2 <- tidycmprsk::crr(Surv(time, status)~., data=M4.dataf, failcode=2)
+fit2$tidy$MolecularFeatureOld <- colnames(M4.pathway)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit2$tidy, file="M4Toxic_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+
+```{r}
+Path.TD3 <- names(M4.td.vec[which(M4.td.vec>=3)])
+M4.dataf.td <- M4.dataf[,c(1,2,which(colnames(M4.dataf)%in%Path.TD3))]
+fit2 <- tidycmprsk::crr(Surv(time, status)~., data=M4.dataf.td, failcode=2)
+#fit2$tidy$MolecularFeatureOld <- colnames(M4.pathway)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit2$tidy, file="M4Toxic_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+```{r}
+create_forestplot(est=fit2$tidy$estimate, lowerci=fit2$tidy$conf.low, upperci=fit2$tidy$conf.high, p=fit2$tidy$p.value,
+                  MolecularFeature = fit2$tidy$term, feat.name="Pathway", title.name="Toxic Death as Event of Interest")
+```
+
+## Second Cancer
+
+```{r}
+tidycmprsk::crr(Surv(time, status)~., data=M4.dataf, failcode=3) %>% tbl_regression(exp=TRUE)
+```
+
+
+```{r}
+fit3 <- tidycmprsk::crr(Surv(time, status)~., data=M4.dataf, failcode=3)
+fit3$tidy$MolecularFeatureOld <- colnames(M4.pathway)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit3$tidy, file="M4SecCan_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+```{r}
+Path.SC3 <- names(M4.sc.vec[which(M4.sc.vec>=3)])
+M4.dataf.sc <- M4.dataf[,c(1,2,which(colnames(M4.dataf)%in%Path.SC3))]
+fit3 <- tidycmprsk::crr(Surv(time, status)~., data=M4.dataf.sc, failcode=3)
+#fit3$tidy$MolecularFeatureOld <- colnames(M4.pathway)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit3$tidy, file="M4SecCan_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+
+```{r}
+create_forestplot(est=fit3$tidy$estimate, lowerci=fit3$tidy$conf.low, upperci=fit3$tidy$conf.high, p=fit3$tidy$p.value,
+                  MolecularFeature = fit3$tidy$term, feat.name="Pathway", title.name="Second Cancer as Event of Interest")
+```
+
+```{r, eval=FALSE}
+tidy.sm <- fit3$tidy[-which(fit3$tidy$term %in% c("DNA_Damage_And_CellCycle_Pathway", "ProteinModification_Ub_Sumo_Pathway")),]
+```
+
+```{r, eval=FALSE}
+create_forestplot(est=tidy.sm$estimate, lowerci=tidy.sm$conf.low, upperci=tidy.sm$conf.high, p=tidy.sm$p.value,
+                  MolecularFeature = tidy.sm$MolecularFeatureOld, feat.name="Pathway", title.name="Second Cancer as Event of Interest")
+```
+
+# M5: Gene Alterations
+
+```{r}
+M5.AllLesions.genes2 <- M5.AllLesions.genes
+colnames(M5.AllLesions.genes2) <- str_replace_all(colnames(M5.AllLesions.genes2), " ", "_")
+colnames(M5.AllLesions.genes2) <- str_replace_all(colnames(M5.AllLesions.genes2), ",", "_")
+M5.dataf <- cbind.data.frame(annot$EFS, annot$status, M5.AllLesions.genes2)
+colnames(M5.dataf)[1:2] <- c("time", "status")
+```
+
+```{r}
+M5.rel.vec <- colSums(M5.dataf[which(M5.dataf$status==1),-c(1,2)])
+head(M5.rel.vec)
+M5.td.vec <- colSums(M5.dataf[which(M5.dataf$status==2),-c(1,2)])
+head(M5.td.vec)
+M5.sc.vec <- colSums(M5.dataf[which(M5.dataf$status==3),-c(1,2)])
+head(M5.sc.vec)
+```
+
+```{r}
+M5.dataf.0 <- M5.dataf[which(M5.dataf$status==0),]
+col.sum.0 <-colSums(M5.dataf.0[,-c(1,2)], na.rm=T) 
+M5.dataf.1 <- M5.dataf[which(M5.dataf$status==1),]
+col.sum.1 <-colSums(M5.dataf.1[,-c(1,2)], na.rm=T) 
+M5.dataf.2 <- M5.dataf[which(M5.dataf$status==2),]
+col.sum.2 <-colSums(M5.dataf.2[,-c(1,2)], na.rm=T) 
+M5.dataf.3 <- M5.dataf[which(M5.dataf$status==3),]
+col.sum.3 <-colSums(M5.dataf.3[,-c(1,2)], na.rm=T) 
+df <- cbind.data.frame(col.sum.0, col.sum.1, col.sum.2, col.sum.3)
+colnames(df) <- c("Censored", "Relapse", "Toxic Death", "Second Cancer")
+head(df)
+head(apply(df, 2, summary))
+Gen.Tab <- df
+```
+
+
+## Relapse
+
+
+
+```{r}
+fit <- tidycmprsk::crr(Surv(time, status)~., data=M5.dataf)
+fit$tidy$MolecularFeatureOld <- colnames(M5.AllLesions.genes)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit$tidy, file="M5GeneRelapse_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+```{r}
+M5.Rel3 <- names(M5.rel.vec[which(M5.rel.vec>=3)])
+M5.dataf.rel <- M5.dataf[,c(1,2,which(colnames(M5.dataf)%in%M5.Rel3))]
+fit <- tidycmprsk::crr(Surv(time, status)~., data=M5.dataf.rel)
+#fit$tidy$MolecularFeatureOld <- colnames(M5.AllLesions.genes)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit$tidy, file="M5GeneRelapse_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+
+```{r}
+tidy.df <- fit$tidy
+# rel.zero <- rownames(df[which(df$Relapse<2),])
+# rel.zero.new <- rel.zero
+# for(i in 1:11){
+#   rel.zero.new[i] <- paste0("`", rel.zero[i], "`")
+# }
+# 
+# tidy.df1 <- tidy.df[-which(tidy.df$term %in% rel.zero.new),]
+tidy.df1.or <- tidy.df[order(tidy.df$p.value),]
+tidy.df1.f <- tidy.df1.or[1:20,]
+create_forestplot(est=tidy.df1.f$estimate, lowerci=tidy.df1.f$conf.low, upperci=tidy.df1.f$conf.high, p=tidy.df1.f$p.value,
+                  MolecularFeature = tidy.df1.f$term, feat.name="Gene Lesion", title.name="Relapse as Event of Interest")
+```
+
+
+## Relapse + MRD
+
+```{r}
+M5.datafm <- cbind.data.frame(annot$EFS, annot$status, annot$MRD.ord, M5.AllLesions.genes2)
+colnames(M5.datafm)[1:3] <- c("time", "status", "MRD")
+```
+
+```{r}
+fit.m <- tidycmprsk::crr(Surv(time, status)~., data=M5.datafm)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit.m$tidy, file="M5GeneRelapseMRD_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+```{r}
+M5.datafm.rel <- M5.datafm[,c(1,2, 3, which(colnames(M5.datafm)%in%M5.Rel3))]
+fit.m <- tidycmprsk::crr(Surv(time, status)~., data=M5.datafm.rel)
+#fit$tidy$MolecularFeatureOld <- colnames(M5.AllLesions.genes)
+```
+
+```{r}
+setwd(res.dir)
+write.csv(fit.m$tidy, file="M5GeneRelapseMRD_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+```{r}
+tidy.df <- fit.m$tidy
+# rel.zero <- rownames(df[which(df$Relapse<2),])
+# rel.zero.new <- rel.zero
+# for(i in 1:11){
+#   rel.zero.new[i] <- paste0("`", rel.zero[i], "`")
+# }
+# 
+# tidy.df1 <- tidy.df[-which(tidy.df$term %in% rel.zero.new),]
+tidy.df1.or <- tidy.df[order(tidy.df$p.value),]
+tidy.df1.f <- tidy.df1.or[1:20,]
+create_forestplot(est=tidy.df1.f$estimate, lowerci=tidy.df1.f$conf.low, upperci=tidy.df1.f$conf.high, p=tidy.df1.f$p.value,
+                  MolecularFeature = tidy.df1.f$term, feat.name="Gene Lesion/MRD", title.name="Relapse as Event of Interest")
+```
+
+
+
+## Toxic Death
+
+```{r}
+fit2 <- tidycmprsk::crr(Surv(time, status)~., data=M5.dataf, failcode=2)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit2$tidy, file="M5GeneToxic_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+```{r}
+M5.TD3 <- names(M5.td.vec[which(M5.td.vec>=3)])
+M5.dataf.td <- M5.dataf[,c(1,2,which(colnames(M5.dataf)%in%M5.TD3))]
+fit2 <- tidycmprsk::crr(Surv(time, status)~., data=M5.dataf.td, failcode=2)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit2$tidy, file="M5GeneToxic_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+```{r}
+tidy.df <- fit2$tidy
+# toxic.zero <- rownames(df[which(df$`Toxic Death`<2),])
+# toxic.zero.new <- toxic.zero
+# for(i in 1:33){
+#   toxic.zero.new[i] <- paste0("`", toxic.zero[i], "`")
+# }
+# 
+# tidy.df1 <- tidy.df[-which(tidy.df$term %in% toxic.zero.new),]
+tidy.df1.or <- tidy.df[order(tidy.df$p.value),]
+tidy.df1.f <- tidy.df1.or[1:20,]
+create_forestplot(est=tidy.df1.f$estimate, lowerci=tidy.df1.f$conf.low, upperci=tidy.df1.f$conf.high, p=tidy.df1.f$p.value,
+                  MolecularFeature = tidy.df1.f$term, feat.name="Gene Lesion", title.name="Toxic Death as Event of Interest")
+```
+
+## Second Cancer
+
+```{r}
+fit3 <- tidycmprsk::crr(Surv(time, status)~., data=M5.dataf, failcode=3)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit3$tidy, file="M5GeneSecCan_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+```{r}
+M5.SC3 <- names(M5.sc.vec[which(M5.sc.vec>=3)])
+M5.dataf.sc <- M5.dataf[,c(1,2,which(colnames(M5.dataf)%in%M5.SC3))]
+fit3 <- tidycmprsk::crr(Surv(time, status)~., data=M5.dataf.sc, failcode=3)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit3$tidy, file="M5GeneSecCan_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+```{r}
+tidy.df <- fit3$tidy
+# sec.zero <- rownames(df[which(df$`Second Cancer`==0),])
+# sec.zero.new <- sec.zero
+# for(i in 1:25){
+#   sec.zero.new[i] <- paste0("`", sec.zero[i], "`")
+# }
+# 
+# tidy.df1 <- tidy.df[-which(tidy.df$term %in% sec.zero.new),]
+tidy.df1.or <- tidy.df[order(tidy.df$p.value),]
+tidy.df1.f <- tidy.df1.or
+create_forestplot(est=tidy.df1.f$estimate, lowerci=tidy.df1.f$conf.low, upperci=tidy.df1.f$conf.high, p=tidy.df1.f$p.value,
+                  MolecularFeature = tidy.df1.f$term, feat.name="Gene Lesion", title.name="Second Cancer as Event of Interest")
+```
+
+
+# M5: Variant Alterations
+
+```{r}
+M5.AllLesions.variants2 <- M5.AllLesions.variants
+colnames(M5.AllLesions.variants2) <- str_replace_all(colnames(M5.AllLesions.variants2), " ", "_")
+colnames(M5.AllLesions.variants2) <- str_replace_all(colnames(M5.AllLesions.variants2), "/", "_")
+colnames(M5.AllLesions.variants2) <- str_replace_all(colnames(M5.AllLesions.variants2), ",", "_")
+M5v.dataf <- cbind.data.frame(annot$EFS, annot$status, M5.AllLesions.variants2)
+colnames(M5v.dataf)[1:2] <- c("time", "status")
+```
+
+```{r}
+M5v.rel.vec <- colSums(M5v.dataf[which(M5v.dataf$status==1),-c(1,2)])
+head(M5v.rel.vec)
+M5v.td.vec <- colSums(M5v.dataf[which(M5v.dataf$status==2),-c(1,2)])
+head(M5v.td.vec)
+M5v.sc.vec <- colSums(M5v.dataf[which(M5v.dataf$status==3),-c(1,2)])
+head(M5v.sc.vec)
+```
+```{r}
+M5v.dataf.0 <- M5v.dataf[which(M5v.dataf$status==0),]
+col.sum.0 <-colSums(M5v.dataf.0[,-c(1,2)], na.rm=T) 
+M5v.dataf.1 <- M5v.dataf[which(M5v.dataf$status==1),]
+col.sum.1 <-colSums(M5v.dataf.1[,-c(1,2)], na.rm=T) 
+M5v.dataf.2 <- M5v.dataf[which(M5v.dataf$status==2),]
+col.sum.2 <-colSums(M5v.dataf.2[,-c(1,2)], na.rm=T) 
+M5v.dataf.3 <- M5v.dataf[which(M5v.dataf$status==3),]
+col.sum.3 <-colSums(M5v.dataf.3[,-c(1,2)], na.rm=T) 
+df <- cbind.data.frame(col.sum.0, col.sum.1, col.sum.2, col.sum.3)
+colnames(df) <- c("Censored", "Relapse", "Toxic Death", "Second Cancer")
+head(df)
+head(apply(df,2,summary))
+Var.Tab <- df
+```
+
+## Relapse
+
+
+```{r, eval=FALSE}
+fit <- tidycmprsk::crr(Surv(time, status)~., data=M5v.dataf) # fails, maybe not enough events?
+```
+
+```{r}
+# Try removing the cases with all zeros
+df.allzero <- df[which(df$Relapse==0 & df$`Toxic Death`==0 & df$`Second Cancer`==0),]
+M5v.dataf.filt <- M5v.dataf[,-which(colnames(M5v.dataf) %in% rownames(df.allzero))]
+df2 <- df[-which(rownames(df) %in% rownames(df.allzero)),]
+# Remove cases with only 1 event
+df2$EventSum <- rowSums(df2[,-1])
+df.oneevent <- df2[which(df2$EventSum==1),]
+M5v.dataf.filt2 <- M5v.dataf.filt[,-which(colnames(M5v.dataf.filt) %in% rownames(df.oneevent))]
+```
+
+```{r}
+fit <- tidycmprsk::crr(Surv(time, status)~., data=M5v.dataf.filt2)
+```
+
+
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit$tidy, file="M5VariantRelapse_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+```{r}
+M5v.Rel <- names(M5v.rel.vec[which(M5v.rel.vec>=3)])
+M5v.dataf.rel <- M5v.dataf[,c(1,2,which(colnames(M5v.dataf)%in%M5v.Rel))]
+fit <- tidycmprsk::crr(Surv(time, status)~., data=M5v.dataf.rel)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit$tidy, file="M5VariantRelapse_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+
+```{r}
+tidy.df <- fit$tidy
+# rel.zero <- rownames(df[which(df$Relapse<2),])
+# rel.zero.new <- rel.zero
+# for(i in 1:19){
+#   rel.zero.new[i] <- paste0("`", rel.zero[i], "`")
+# }
+# 
+# tidy.df1 <- tidy.df[-which(tidy.df$term %in% rel.zero.new),]
+tidy.df1.or <- tidy.df[order(tidy.df$p.value),]
+tidy.df1.f <- tidy.df1.or[1:20,]
+create_forestplot(est=tidy.df1.f$estimate, lowerci=tidy.df1.f$conf.low, upperci=tidy.df1.f$conf.high, p=tidy.df1.f$p.value,
+                  MolecularFeature = tidy.df1.f$term, feat.name="Gene Variant", title.name="Relapse as Event of Interest")
+```
+
+```{r, eval=FALSE}
+tidy.df <- fit$tidy
+rel.zero <- rownames(df[which(df$Relapse<5),])
+rel.zero.new <- rel.zero
+for(i in 1:42){
+  rel.zero.new[i] <- paste0("`", rel.zero[i], "`")
+}
+
+tidy.df1 <- tidy.df[-which(tidy.df$term %in% rel.zero.new),]
+tidy.df1.or <- tidy.df1[order(tidy.df1$p.value),]
+tidy.df1.f <- tidy.df1.or[1:20,]
+create_forestplot(est=tidy.df1.f$estimate, lowerci=tidy.df1.f$conf.low, upperci=tidy.df1.f$conf.high, p=tidy.df1.f$p.value,
+                  MolecularFeature = tidy.df1.f$term, feat.name="Gene Variant", title.name="Relapse as Event of Interest")
+```
+
+## Relapse + MRD
+
+
+
+```{r}
+M5v.datafm <- cbind.data.frame(annot$EFS, annot$status, annot$MRD.ord, M5.AllLesions.variants2)
+colnames(M5v.datafm)[1:3] <- c("time", "status", "MRD")
+```
+
+```{r}
+# Try removing the cases with all zeros
+df.allzero <- df[which(df$Relapse==0 & df$`Toxic Death`==0 & df$`Second Cancer`==0),]
+M5v.datafm.filt <- M5v.datafm[,-which(colnames(M5v.datafm) %in% rownames(df.allzero))]
+df2 <- df[-which(rownames(df) %in% rownames(df.allzero)),]
+# Remove cases with only 1 event
+df2$EventSum <- rowSums(df2[,-1])
+df.oneevent <- df2[which(df2$EventSum==1),]
+M5v.datafm.filt2 <- M5v.datafm.filt[,-which(colnames(M5v.datafm.filt) %in% rownames(df.oneevent))]
+```
+
+```{r}
+fit.m <- tidycmprsk::crr(Surv(time, status)~., data=M5v.datafm.filt2)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit.m$tidy, file="M5VariantRelapseMRD_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+```{r}
+M5v.datafm.rel <- M5v.datafm[,c(1,2,3,which(colnames(M5v.datafm)%in%M5v.Rel))]
+fit.m <- tidycmprsk::crr(Surv(time, status)~., data=M5v.datafm.rel)
+```
+
+```{r}
+setwd(res.dir)
+write.csv(fit.m$tidy, file="M5VariantRelapseMRD_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+```{r}
+tidy.df <- fit.m$tidy
+# rel.zero <- rownames(df[which(df$Relapse<2),])
+# rel.zero.new <- rel.zero
+# for(i in 1:19){
+#   rel.zero.new[i] <- paste0("`", rel.zero[i], "`")
+# }
+# 
+# tidy.df1 <- tidy.df[-which(tidy.df$term %in% rel.zero.new),]
+tidy.df1.or <- tidy.df[order(tidy.df$p.value),]
+tidy.df1.f <- tidy.df1.or[1:20,]
+create_forestplot(est=tidy.df1.f$estimate, lowerci=tidy.df1.f$conf.low, upperci=tidy.df1.f$conf.high, p=tidy.df1.f$p.value,
+                  MolecularFeature = tidy.df1.f$term, feat.name="Variant Lesion", title.name="Relapse as Event of Interest")
+```
+
+
+
+## Toxic Death
+
+```{r}
+fit2 <- tidycmprsk::crr(Surv(time, status)~., data=M5v.dataf.filt2, failcode=2)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit2$tidy, file="M5VariantToxic_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+```{r}
+M5v.TD <- names(M5v.td.vec[which(M5v.td.vec>=3)])
+M5v.dataf.td <- M5v.dataf[,c(1,2,which(colnames(M5v.dataf)%in%M5v.TD))]
+fit2 <- tidycmprsk::crr(Surv(time, status)~., data=M5v.dataf.td, failcode=2)
+```
+
+```{r}
+setwd(res.dir)
+write.csv(fit2$tidy, file="M5VariantToxic_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+```{r}
+tidy.df <- fit2$tidy
+# toxic.zero <- rownames(df[which(df$`Toxic Death`<2),])
+# toxic.zero.new <- toxic.zero
+# for(i in 1:47){
+#   toxic.zero.new[i] <- paste0("`", toxic.zero[i], "`")
+# }
+# 
+# tidy.df1 <- tidy.df[-which(tidy.df$term %in% toxic.zero.new),]
+tidy.df1.or <- tidy.df[order(tidy.df$p.value),]
+tidy.df1.f <- tidy.df1.or[1:20,]
+create_forestplot(est=tidy.df1.f$estimate, lowerci=tidy.df1.f$conf.low, upperci=tidy.df1.f$conf.high, p=tidy.df1.f$p.value,
+                  MolecularFeature = tidy.df1.f$term, feat.name="Variant Lesion", title.name="Toxic Death as Event of Interest")
+```
+
+```{r, eval=FALSE}
+tidy.df <- fit2$tidy
+toxic.zero <- rownames(df[which(df$`Toxic Death`<5),])
+toxic.zero.new <- toxic.zero
+for(i in 1:56){
+  toxic.zero.new[i] <- paste0("`", toxic.zero[i], "`")
+}
+
+tidy.df1 <- tidy.df[-which(tidy.df$term %in% toxic.zero.new),]
+tidy.df1.or <- tidy.df1[order(tidy.df1$p.value),]
+tidy.df1.f <- tidy.df1.or[1:20,]
+create_forestplot(est=tidy.df1.f$estimate, lowerci=tidy.df1.f$conf.low, upperci=tidy.df1.f$conf.high, p=tidy.df1.f$p.value,
+                  MolecularFeature = tidy.df1.f$term, feat.name="Variant Lesion", title.name="Toxic Death as Event of Interest")
+```
+
+## Second Cancer
+
+```{r}
+fit3 <- tidycmprsk::crr(Surv(time, status)~., data=M5v.dataf.filt2, failcode=3)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit3$tidy, file="M5VariantSecCan_CR_2023-07-17.csv", row.names=FALSE)
+```
+
+```{r}
+M5v.SC <- names(M5v.sc.vec[which(M5v.sc.vec>=3)])
+M5v.dataf.sc <- M5v.dataf[,c(1,2,which(colnames(M5v.dataf)%in%M5v.SC))]
+fit3 <- tidycmprsk::crr(Surv(time, status)~., data=M5v.dataf.sc, failcode=3)
+```
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write.csv(fit3$tidy, file="M5VariantSecCan_AtLeast3_CR_2023-07-27.csv", row.names=FALSE)
+```
+
+```{r}
+tidy.df <- fit3$tidy
+# sec.zero <- rownames(df[which(df$`Second Cancer`<2),])
+# sec.zero.new <- sec.zero
+# for(i in 1:54){
+#   sec.zero.new[i] <- paste0("`", sec.zero[i], "`")
+# }
+# 
+# tidy.df1 <- tidy.df[-which(tidy.df$term %in% sec.zero.new),]
+tidy.df1.or <- tidy.df[order(tidy.df$p.value),]
+tidy.df1.f <- tidy.df1.or
+create_forestplot(est=tidy.df1.f$estimate, lowerci=tidy.df1.f$conf.low, upperci=tidy.df1.f$conf.high, p=tidy.df1.f$p.value,
+                  MolecularFeature = tidy.df1.f$term, feat.name="Variant Lesion", title.name="Second Cancer as Event of Interest")
+```
+
+
+```{r, eval=FALSE}
+tidy.df <- fit3$tidy
+sec.zero <- rownames(df[which(df$`Second Cancer`<5),])
+sec.zero.new <- sec.zero
+for(i in 1:56){
+  sec.zero.new[i] <- paste0("`", sec.zero[i], "`")
+}
+
+tidy.df1 <- tidy.df[-which(tidy.df$term %in% sec.zero.new),]
+tidy.df1.or <- tidy.df1[order(tidy.df1$p.value),]
+tidy.df1.f <- tidy.df1.or[1:20,]
+create_forestplot(est=tidy.df1.f$estimate, lowerci=tidy.df1.f$conf.low, upperci=tidy.df1.f$conf.high, p=tidy.df1.f$p.value,
+                  MolecularFeature = tidy.df1.f$term, feat.name="Variant Lesion", title.name="Second Cancer as Event of Interest")
+```
+
+# Additional Gray's Tests
+
+Recall, event type 1 is relapse, type 2 is toxic death, and type 3 is second cancer. Censoring is 0 in the indicator. Updated 9/15/2023 to test SPI1 with second cancer.
+
+```{r}
+load("Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/mulligrp/petri_work/outcome/Data_added_groups.Rdata")
+```
+
+```{r}
+table(M3.datafm.filt$TAL1)
+table(M4.dataf$compare_PI3K_Notch)
+table(M5v.datafm$TAL1)
+table(M5v.datafm$LMO2)
+table(M5v.datafm$MYC)
+table(M5v.datafm$PTEN)
+table(M5v.datafm$NOTCH1)
+```
+
+### TAL1 genetic subtypes
+
+```{r}
+cmprsk::cuminc(M3.datafm.filt$time, M3.datafm.filt$status, group=M3.datafm.filt$TAL1)
+```
+
+### PI3K vs. Notch Pathway
+
+There is a significant difference between the cumulative incidence of relapse between the PI3K pathway and the Notch Pathway (Holm-adjusted P=0.0091, Gray's test). 
+
+```{r}
+cmprsk::cuminc(M4.dataf$time, M4.dataf$status, group=M4.dataf$compare_PI3K_Notch)
+```
+
+```{r}
+x <- levels(as.factor(M4.dataf$compare_PI3K_Notch))
+#apply(combn(x,2),2,paste,collapse=",")
+#apply(combn(x,2),2)
+#class(combn(x,2))
+comb2levs <- combn(x,2)
+```
+
+
+```{r}
+test.list <- list()
+M4.rel.test.df <- data.frame()
+for(i in 1:ncol(comb2levs)){
+  M4.dataf.temp <- M4.dataf[which(M4.dataf$compare_PI3K_Notch %in% comb2levs[,i]),]
+  ccfit <- cmprsk::cuminc(M4.dataf.temp$time, M4.dataf.temp$status, group=M4.dataf.temp$compare_PI3K_Notch)
+  test.list[[i]] <- ccfit$Tests
+  rel.test <- c(ccfit$Tests[1,], levels(as.factor(M4.dataf.temp$compare_PI3K_Notch))[1], levels(as.factor(M4.dataf.temp$compare_PI3K_Notch))[2])
+  names(rel.test) <- c("stat", "pv", "df", "Group1", "Group2")
+  M4.rel.test.df <- rbind.data.frame(rel.test.df, rel.test)
+}
+colnames(M4.rel.test.df) <- c("stat", "p", "df", "Pathway1", "Pathway2")
+M4.rel.test.df$HolmP <- p.adjust(M4.rel.test.df$p, method="holm")
+M4.rel.test.df
+M4.rel.test.df[which.min(M4.rel.test.df$HolmP),]
+```
+
+
+### TAL1 Upstream Indel, Other, Wt
+
+Global Gray's test suggest difference between the three TAL1 groups, with P=3.08e-5. Pairwise Gray's test suggest significant difference between TAL1 Upstream Indel and TAL1 Other (Holm P=4.94e-3) as well as TAL1 Upstream Indel and wt (Holm P=1.35e-5). The difference between TAL1 Other and wt did not reach significance after multiplicity adjustment (Holm P=9.5e-2). 
+
+```{r}
+cmprsk::cuminc(M5v.datafm$time, M5v.datafm$status, group=M5v.datafm$TAL1)
+```
+
+
+
+```{r}
+x <- levels(as.factor(M5v.datafm$TAL1))
+comb2levs <- combn(x,2)
+test.list <- list()
+TAL1.rel.test.df <- data.frame()
+for(i in 1:ncol(comb2levs)){
+  data.temp <- M5v.datafm[which(M5v.datafm$TAL1 %in% comb2levs[,i]),]
+  ccfit <- cmprsk::cuminc(data.temp$time, data.temp$status, group=data.temp$TAL1)
+  test.list[[i]] <- ccfit$Tests
+  rel.test <- c(ccfit$Tests[1,], comb2levs[1,i], comb2levs[2,i])
+  names(rel.test) <- c("stat", "pv", "df", "Group1", "Group2")
+  TAL1.rel.test.df <- rbind.data.frame(TAL1.rel.test.df, rel.test)
+}
+colnames(TAL1.rel.test.df) <- c("stat", "p", "df", "Group1", "Group2")
+TAL1.rel.test.df$HolmP <- p.adjust(TAL1.rel.test.df$p, method="holm")
+TAL1.rel.test.df
+TAL1.rel.test.df[which.min(TAL1.rel.test.df$HolmP),]
+```
+
+
+### LMO2 Intergenic Loss, Other, wt
+
+Global Gray's test suggest difference between the three LMO2 groups, with P=0.00019. Pairwise Gray's tests suggest significant difference between all groups (Holm's P < 0.05 for all pairs). 
+
+
+```{r}
+cmprsk::cuminc(M5v.datafm$time, M5v.datafm$status, group=M5v.datafm$LMO2)
+```
+
+
+```{r}
+x <- levels(as.factor(M5v.datafm$LMO2))
+comb2levs <- combn(x,2)
+test.list <- list()
+LMO2.rel.test.df <- data.frame()
+for(i in 1:ncol(comb2levs)){
+  data.temp <- M5v.datafm[which(M5v.datafm$LMO2 %in% comb2levs[,i]),]
+  ccfit <- cmprsk::cuminc(data.temp$time, data.temp$status, group=data.temp$LMO2)
+  test.list[[i]] <- ccfit$Tests
+  rel.test <- c(ccfit$Tests[1,], comb2levs[1,i], comb2levs[2,i])
+  names(rel.test) <- c("stat", "pv", "df", "Group1", "Group2")
+  LMO2.rel.test.df <- rbind.data.frame(LMO2.rel.test.df, rel.test)
+}
+colnames(LMO2.rel.test.df) <- c("stat", "p", "df", "Group1", "Group2")
+LMO2.rel.test.df$HolmP <- p.adjust(LMO2.rel.test.df$p, method="holm")
+LMO2.rel.test.df
+LMO2.rel.test.df[which.min(LMO2.rel.test.df$HolmP),]
+```
+
+### MYC TCR, Other, wt
+
+Global Gray's test suggest difference between the three MYC groups, with P=0.0066. Pairwise Gray's tests suggest significant difference between MYC TCR and MYC Other (Holm P=0.004), MYC TCR and wt (Holm P=0.009), but not MYC other and wt (Holm P=0.22).
+
+
+```{r}
+cmprsk::cuminc(M5v.datafm$time, M5v.datafm$status, group=M5v.datafm$MYC)
+```
+
+```{r}
+x <- levels(as.factor(M5v.datafm$MYC))
+comb2levs <- combn(x,2)
+test.list <- list()
+MYC.rel.test.df <- data.frame()
+for(i in 1:ncol(comb2levs)){
+  data.temp <- M5v.datafm[which(M5v.datafm$MYC %in% comb2levs[,i]),]
+  ccfit <- cmprsk::cuminc(data.temp$time, data.temp$status, group=data.temp$MYC)
+  test.list[[i]] <- ccfit$Tests
+  rel.test <- c(ccfit$Tests[1,], comb2levs[1,i], comb2levs[2,i])
+  names(rel.test) <- c("stat", "pv", "df", "Group1", "Group2")
+  MYC.rel.test.df <- rbind.data.frame(MYC.rel.test.df, rel.test)
+}
+colnames(MYC.rel.test.df) <- c("stat", "p", "df", "Group1", "Group2")
+MYC.rel.test.df$HolmP <- p.adjust(MYC.rel.test.df$p, method="holm")
+MYC.rel.test.df
+MYC.rel.test.df[which.min(MYC.rel.test.df$HolmP),]
+```
+
+### PTEN Deletion, Other, wt
+
+Global Gray's test suggest difference between the three PTEN groups, with P=2.13e-10. All Pairwise Gray's tests were significant at Holm P<0.05. 
+
+
+```{r}
+cmprsk::cuminc(M5v.datafm$time, M5v.datafm$status, group=M5v.datafm$PTEN)
+```
+
+
+```{r}
+x <- levels(as.factor(M5v.datafm$PTEN))
+comb2levs <- combn(x,2)
+test.list <- list()
+PTEN.rel.test.df <- data.frame()
+for(i in 1:ncol(comb2levs)){
+  data.temp <- M5v.datafm[which(M5v.datafm$PTEN %in% comb2levs[,i]),]
+  ccfit <- cmprsk::cuminc(data.temp$time, data.temp$status, group=data.temp$PTEN)
+  test.list[[i]] <- ccfit$Tests
+  rel.test <- c(ccfit$Tests[1,], comb2levs[1,i], comb2levs[2,i])
+  names(rel.test) <- c("stat", "pv", "df", "Group1", "Group2")
+  PTEN.rel.test.df <- rbind.data.frame(PTEN.rel.test.df, rel.test)
+}
+colnames(PTEN.rel.test.df) <- c("stat", "p", "df", "Group1", "Group2")
+PTEN.rel.test.df$HolmP <- p.adjust(PTEN.rel.test.df$p, method="holm")
+PTEN.rel.test.df
+PTEN.rel.test.df[which.min(PTEN.rel.test.df$HolmP),]
+```
+
+### NOTCH1 Intragenic, Other, wt
+
+Global Gray's test suggest difference between the three PTEN groups, with P=1.69e-5. The pairwise Gray's tests suggest significant differences between NOTCH1 Intragenic loss and NOTCH1 other (Holm P=0.0016) and NOTCH1 other and wt (Holm P=0.0002). The NOTCH1 Intragenic loss and wt comparison did not reach significance (Holm P=0.22).
+
+
+```{r}
+cmprsk::cuminc(M5v.datafm$time, M5v.datafm$status, group=M5v.datafm$NOTCH1)
+```
+
+```{r}
+x <- levels(as.factor(M5v.datafm$NOTCH1))
+comb2levs <- combn(x,2)
+test.list <- list()
+NOTCH1.rel.test.df <- data.frame()
+for(i in 1:ncol(comb2levs)){
+  data.temp <- M5v.datafm[which(M5v.datafm$NOTCH1 %in% comb2levs[,i]),]
+  ccfit <- cmprsk::cuminc(data.temp$time, data.temp$status, group=data.temp$NOTCH1)
+  test.list[[i]] <- ccfit$Tests
+  rel.test <- c(ccfit$Tests[1,], comb2levs[1,i], comb2levs[2,i])
+  names(rel.test) <- c("stat", "pv", "df", "Group1", "Group2")
+  NOTCH1.rel.test.df <- rbind.data.frame(NOTCH1.rel.test.df, rel.test)
+}
+colnames(NOTCH1.rel.test.df) <- c("stat", "p", "df", "Group1", "Group2")
+NOTCH1.rel.test.df$HolmP <- p.adjust(NOTCH1.rel.test.df$p, method="holm")
+NOTCH1.rel.test.df
+NOTCH1.rel.test.df[which.min(NOTCH1.rel.test.df$HolmP),]
+```
+
+
+
+# Create Tables for Each Matrix and Save
+
+
+```{r}
+Driver.mtx <- as.matrix(Driver.tab)
+M1.tab <- cbind(Driver.mtx, rowSums(Driver.mtx))
+colnames(M1.tab) <- c("Censor", "Relapse", "Toxic Death", "Second Cancer", "Total")
+M1.df <- as.data.frame(M1.tab)
+M1.df$Driver <- rownames(M1.df)
+M3.tab <- cbind(as.matrix(Subtype.tab), rowSums(Subtype.tab))
+colnames(M3.tab) <- c("Censor", "Relapse", "Toxic Death", "Second Cancer", "Total")
+M3.df <- as.data.frame(M3.tab)
+M3.df$Subtype <- rownames(M3.df)
+M3ss.tab <- cbind.data.frame(rownames(Subsub.Tab), Subsub.Tab, rowSums(Subsub.Tab))
+colnames(M3ss.tab) <- c("Subsubtype", "Censor", "Relapse", "Toxic Death", "Second Cancer", "Total")
+M3gs.tab <- cbind.data.frame(rownames(GenSub.Tab), GenSub.Tab, rowSums(GenSub.Tab))
+colnames(M3gs.tab) <- c("Genetic Subtype", "Censor", "Relapse", "Toxic Death", "Second Cancer", "Total")
+M4.tab <- cbind.data.frame(rownames(Pathway.Tab), Pathway.Tab, rowSums(Pathway.Tab))
+colnames(M4.tab) <- c("Pathway", "Censor", "Relapse", "Toxic Death", "Second Cancer", "Total")
+M5.tab <- cbind.data.frame(rownames(Gen.Tab), Gen.Tab, rowSums(Gen.Tab))
+colnames(M5.tab) <- c("Gene Lesion", "Censor", "Relapse", "Toxic Death", "Second Cancer", "Total")
+M5v.tab <- cbind.data.frame(rownames(Var.Tab), Var.Tab, rowSums(Var.Tab))
+colnames(M5v.tab) <- c("Variant Lesion", "Censor", "Relapse", "Toxic Death", "Second Cancer", "Total")
+
+tab.list <- list(M1.df, M3.df, M3ss.tab, M3gs.tab, M4.tab, M5.tab, M5v.tab)
+names(tab.list) <- c("M1 Driver", "M3 Subtype", "M3 Subsubtype", "M3 Genetic Subtype", "M4 Pathway", "M5 Gene Lesion", "M5 Variant Lesion")
+```
+
+
+
+```{r, eval=FALSE}
+setwd(res.dir)
+write_xlsx(tab.list, "CompetingRiskTable_2023-08-03.xlsx")
+```
+
+

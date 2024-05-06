@@ -1,0 +1,701 @@
+---
+title: "Combined Subtype Tree"
+author: "AES"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    df_print: paged
+    number_sections: yes
+    highlight: haddock
+  html_notebook:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Set Up
+
+```{r}
+# Setup
+
+library(table1)
+library(glmnet)
+library(survival)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(partykit)
+library(ranger)
+library(ggplot2)
+library(survminer)
+library(forestplot)
+library(readxl)
+library(stringr)
+library(ipred)
+library(splitTools)
+library(tidyr)
+library(RColorBrewer)
+library(dplyr)
+library(survival)
+library(ggplot2)
+library(survminer)
+library(rpart)
+library(intsurv) # note this is package with cIndex function
+library(measures)
+library(ggpubr)
+library(ggmosaic)
+library(rlist)
+library(stringr)
+library(coxphf)
+library(data.tree)
+library(dendextend)
+
+# Load Data and Splits
+
+load("Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Data/Data_1309Samples.RData")
+load("Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Data/DataSplitIDs_2023-07-18.RData")
+res.dir <- "Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Results/PrognosticModels/RandomForests/"
+
+# Clean clinical data
+# Clean clinical data
+annot$status <- factor(annot$OS.status, levels=c(0, 1), labels=c("Alive", "Died"))
+annot$MRD.ord <- as.factor(ifelse(annot$Day.29.MRD<0.1, "Negative", ifelse(annot$Day.29.MRD<10, "Low Positive", ifelse(is.na(annot$Day.29.MRD), NA, "High Positive"))))
+annot$MRD.ord <- ifelse(is.na(annot$Day.29.MRD), NA, ifelse(annot$Day.29.MRD<0.1, "Negative", ifelse(annot$Day.29.MRD<10, "Low Positive", "High Positive")))
+annot$MRD.N <- annot$Day.29.MRD/100
+annot$MRD.bin <- ifelse(is.na(annot$Day.29.MRD), NA, ifelse(annot$Day.29.MRD<0.1, "Negative", "Positive"))
+annot$MRD.bin01 <- ifelse(annot$MRD.bin=="Negative", 0, 1)
+annot$WBC.bin <- ifelse(is.na(annot$WBC.at.Diagnosis), NA, ifelse(annot$WBC.at.Diagnosis < 200, "Low", "High"))
+annot$WBC.bin01 <- ifelse(annot$WBC.bin=="Low", 0, 1)
+annot$CNS.ord <- ifelse(is.na(annot$CNS.Status), NA, ifelse(annot$CNS.Status=="Unknown", NA, ifelse(annot$CNS.Status=="CNS 1", "CNS 1", ifelse(annot$CNS.Status=="CNS 2"|annot$CNS.Status=="CNS 2a"|annot$CNS.Status=="CNS 2b"|annot$CNS.Status=="CNS 2c", "CNS 2", "CNS 3"))))
+annot$CNS.bin <- ifelse(is.na(annot$CNS.ord), NA, ifelse(annot$CNS.ord=="CNS 3", "3", "Other"))
+annot$CNS.bin01 <- ifelse(annot$CNS.bin=="Other", 0, 1)
+annot$Trt.Arm <- ifelse(annot$Treatment.Arm=="missing", NA, annot$Treatment.Arm)
+annot$race <- ifelse(annot$Race=='American Indian or Alaska Native'|annot$Race=='Asian'|annot$Race=='Native Hawaiian or other Pacific Islander', "Other", annot$Race)
+annot$Sex.bin01=ifelse(annot$Sex=="Male", 1, 0)
+```
+
+# Repeated Combined Subtype Factor Tree
+
+```{r}
+# Combined Subtype
+
+M3c.data=data.frame(M3.subtype[,!colnames(M3.subtype)%in%c("ETP-like", "TAL1 αβ-like", "TAL1 DP-like", "TLX3", "NKX2-1", "HOXA9 TCR", "KMT2A", "MLLT10", "NUP98", "NUP214")], M3.subsubtype[,colnames(M3.subsubtype)%in%c("TLX3 DP-like", "TLX3 Immature", "NKX2-1 TCR", "NKX2-1 Other")], M3.genetic.subtype, check.names = F)
+M3c.data$ID <- rownames(M3c.data)
+M3c.data.long <- pivot_longer(M3c.data, !ID, names_to="Subtype")
+M3c.data.fac <- M3c.data.long[which(M3c.data.long$value==1),]
+rownames(M3c.data)[which(!(rownames(M3c.data) %in% M3c.data.fac$ID))]
+M3c.data.fac <- as.data.frame(M3c.data.fac)
+M3c.data.fac$Subtype <- as.factor(M3c.data.fac$Subtype)
+annot.filt <- annot[which(rownames(annot)%in% M3c.data.fac$ID),]
+reorder_indx <- match(rownames(annot.filt), M3c.data.fac$ID)
+M3c.data.fac.or <- M3c.data.fac[reorder_indx,]
+all.equal(rownames(annot.filt), M3c.data.fac.or$ID)
+```
+
+
+```{r}
+sub.tree.list3 <- list()
+sub.term.node.vec3 <- c()
+sub.c.ind.vec3 <- c()
+#sub.c.ind.MRD.vec <- c()
+sub.out.list <- list()
+for(i in 1:100){
+  clin.data <- annot.filt[which(rownames(annot.filt) %in% train.id.df[,i]),]
+  M.data <- M3c.data.fac.or[which(M3c.data.fac.or$ID %in% train.id.df[,i]),,drop=FALSE]
+  M.EFS.df.adj <- cbind.data.frame(clin.data$EFS, clin.data$EFS.status, clin.data$MRD.bin, as.factor(M.data[,2]))
+  rownames(M.EFS.df.adj) <- rownames(clin.data)
+  M.EFS.df.adj <- M.EFS.df.adj[which(complete.cases(M.EFS.df.adj)),]   # Remove missing data (keep only complete cases)
+  colnames(M.EFS.df.adj) <- c("EFS", "EFS.status", "MRD", "Subtype") # Rename the columns
+  # Inside surv tree function
+  set.seed(111+10*i)
+  cp=0
+  xval=20
+  minsplit=2
+  maxdepth=2
+  M.clin.data <- M.EFS.df.adj
+  colnames(M.clin.data)[1:2] <- c("time", "status")
+  tree.m1.efs <- rpart(Surv(time, status)~Subtype, data=M.clin.data, 
+                       control=rpart.control(cp=cp, xval=xval, minsplit=minsplit, maxdepth=maxdepth))
+  #rpart.plot(tree.m1.os)
+  #printcp(tree.m1.os)
+  n.nodes <- length(which(tree.m1.efs$frame$var=="<leaf>"))
+  #print(paste0("Tree ", i, " has ", n.nodes, " nodes"))
+  sub.term.node.vec3[i] <- n.nodes
+  sub.tree.list3[[i]] <- tree.m1.efs
+  
+  # Save classification
+  table_res<-as.data.frame.matrix(table(M.clin.data$Subtype,tree.m1.efs$where))
+  table_res$new.node<-c(rep(NA,nrow(table_res)))
+  for (j in 1:nrow(table_res)){
+    table_res$new.node[j]<-colnames(table_res)[which.max(table_res[j,])]
+  }
+  table_res$Subtype <- rownames(table_res)
+  tree.out <- tree.m1.efs$frame
+  tree.out$node <- rownames(tree.out)
+  tree.out.fin <- tree.out[which(tree.out$var=="<leaf>"),c("var", "n", "yval", "node")]
+  tree.out.fin.or <- tree.out.fin[order(tree.out.fin$yval, decreasing=F),]
+  tree.out.fin.or$Risk <- c("Low", "Intermediate-Low", "Intermediate-High", "High")
+  where.node <- cbind.data.frame(table(tree.m1.efs$where))
+  colnames(where.node) <- c("new.node", "n")
+  if(any(duplicated(where.node$n))){
+    tree.out.fin.or2 <- left_join(tree.out.fin.or, where.node, by="n", relationship="many-to-many")
+  }
+  else{
+    tree.out.fin.or2 <- inner_join(tree.out.fin.or, where.node, by="n")
+  }
+  if(length(tree.out.fin.or2)==6){
+    tree.out.fin.or2 <- tree.out.fin.or2[c(1,2,3,6),]
+  }
+  table.res <- dplyr::inner_join(table_res, tree.out.fin.or2, by="new.node")
+  table.res.fin <- table.res[,c("Subtype", "Risk")]
+  sub.out.list[[i]] <- table.res.fin
+
+  
+  # Validate
+  # EFS
+  clin.data.ts <- annot.filt[which(rownames(annot.filt) %in% test.id.df[,i]),]
+  M.data.ts <- M3c.data.fac.or[which(M3c.data.fac.or$ID %in% test.id.df[,i]),,drop=FALSE]
+  M.EFS.df.adj.ts <- cbind.data.frame(clin.data.ts$EFS, clin.data.ts$EFS.status, clin.data.ts$MRD.bin,
+                                      as.factor(M.data.ts[,2]))
+  rownames(M.EFS.df.adj.ts) <- rownames(clin.data.ts)
+  M.EFS.df.adj.ts <- M.EFS.df.adj.ts[which(complete.cases(M.EFS.df.adj.ts)),]   # Remove missing data (keep only complete cases)
+  colnames(M.EFS.df.adj.ts) <- c("EFS", "EFS.status", "MRD", "Subtype") # Rename the columns
+  M.EFS.df.adj.ts$PredSurv <- predict(tree.m1.efs, M.EFS.df.adj.ts)
+  conc.out <- cIndex(time=M.EFS.df.adj.ts$EFS, event=M.EFS.df.adj.ts$EFS.status, risk_score=M.EFS.df.adj.ts$PredSurv)
+  sub.c.ind.vec3[i] <- conc.out[1]
+  # # Validate with 8 groups
+  # M.EFS.df.adj.ts.rsk <- inner_join(M.EFS.df.adj.ts, table.res.fin, by="Subtype")
+  # M.EFS.df.adj.ts.rsk$Group <- as.factor(paste(M.EFS.df.adj.ts.rsk$Risk, M.EFS.df.adj.ts.rsk$MRD, sep="_"))
+  # fit <- coxphf(Surv(EFS, EFS.status)~Group, data=M.EFS.df.adj.ts.rsk, maxstep=0.001, maxit=1000)
+}
+summary(sub.term.node.vec3)
+table(as.factor(sub.term.node.vec3))
+summary(sub.c.ind.vec3)
+```
+
+# Look at Splits
+
+```{r}
+#risk.out.df <- do.call(rbind.data.frame, table.res.fin)
+risk.out.df <- data.frame(Subtype=levels(M3c.data.fac.or$Subtype))
+for(i in 1:length(sub.out.list)){
+  temp.df <- sub.out.list[[i]]
+  risk.out.df <- full_join(risk.out.df, temp.df, by="Subtype")
+  
+}
+rownames(risk.out.df) <- risk.out.df$Subtype
+risk.out.df <- risk.out.df[,-1]
+colnames(risk.out.df) <- paste0("RiskClass", seq(1:100))
+risk.out.df.t <- as.data.frame(t(risk.out.df))
+
+risk.out.sum <- data.frame()
+for(i in 1:ncol(risk.out.df.t)){
+  n.na <- length(which(is.na(risk.out.df.t[,i])))
+  n.high <- length(which(risk.out.df.t[,i]=="High"))
+  n.inth <- length(which(risk.out.df.t[,i]=="Intermediate-High"))
+  n.intl <- length(which(risk.out.df.t[,i]=="Intermediate-Low"))
+  n.low  <- length(which(risk.out.df.t[,i]=="Low"))
+  n <- n.high+n.inth+n.intl+n.low
+  n.tot <- n + n.na
+  p.high <- n.high/n
+  p.inth <- n.inth/n
+  p.intl <- n.intl/n
+  p.low <- n.low/n
+  out.vec <- c(colnames(risk.out.df.t)[i], n.high, n.inth, n.intl, n.low, n.na, n, n.tot, p.high, p.inth, p.intl, p.low)
+  risk.out.sum <- rbind.data.frame(risk.out.sum, out.vec)
+}
+colnames(risk.out.sum) <- c("Subtype", "High", "Intermediate-High", "Intermediate-Low", "Low", "NA", "N.Boot", "N.Total",
+                            "High.Prop", "Int-High.Prop", "Int-Low.Prop", "Low.Prop")
+risk.out.sum
+```
+
+## Bar Plots
+
+```{r}
+risk.fig.df <- risk.out.sum[,c(1,9:12)]
+risk.fig.df.long <- pivot_longer(risk.fig.df, !Subtype, names_to="Class")
+head(risk.fig.df.long)
+```
+
+```{r, eval=FALSE}
+ggplot(data=risk.fig.df.long, aes(x=Subtype, y=value, fill=Class))+geom_bar(stat="identity") + theme_minimal()+
+  theme(axis.text.y=element_blank(), axis.title.y=element_blank(), axis.text.x = element_text(angle = 45, hjust=1), 
+        legend.position = "top") 
+```
+```{r, eval=FALSE}
+ggplot(data=risk.fig.df.long, aes(x=Subtype, y=value, fill=Class))+geom_col(position="fill") + theme_minimal()+
+  theme(axis.text.y=element_blank(), axis.title.y=element_blank(), axis.text.x = element_text(angle = 45, hjust=1), 
+        legend.position = "top") 
+```
+
+
+```{r, eval=FALSE}
+ggplot(risk.fig.df.long, aes(Subtype, value)) +
+  geom_tile(aes(fill = Class), colour = "grey50")
+```
+
+
+```{r}
+risk.fig.df2 <- risk.out.sum[,c(1:6)]
+risk.fig.df.long2 <- pivot_longer(risk.fig.df2, !Subtype, names_to="Class")
+head(risk.fig.df.long2)
+```
+```{r, fig.height=6, fig.width=10}
+risk.fig.df.long2$value <- as.numeric(risk.fig.df.long2$value)
+sub.or <- risk.fig.df[order(risk.fig.df$Low.Prop, decreasing = F),]
+reor.ind <- match(sub.or$Subtype, risk.fig.df.long2$Subtype)
+risk.fig.df.long2.fac <- risk.fig.df.long2
+risk.fig.df.long2.fac$SubtypeFac <- factor(risk.fig.df.long2$Subtype, levels=sub.or$Subtype)
+ggplot(data=risk.fig.df.long2.fac, aes(x=SubtypeFac, y=value, fill=Class))+geom_col(position="fill") + theme_minimal()+
+  theme( axis.text.x = element_text(angle = 45, hjust=1), legend.position = "bottom", axis.title=element_blank())  + scale_y_continuous(labels = scales::percent) + scale_fill_brewer(palette = "Paired") +
+  coord_flip()
+```
+
+
+
+
+# Repeated Factor Trees with Bootstrap on full data
+
+```{r}
+n.boot <- 1000
+n <- nrow(annot.filt)
+set.seed(901)
+boot.ind <- replicate(n.boot,sample(n,replace=T))
+sub.tree.list <- list()
+sub.term.node.vec <- c()
+#sub.c.ind.vec <- c()
+#sub.c.ind.MRD.vec <- c()
+sub.out.list.boot <- list()
+for(i in 1:n.boot){
+  temp.ind <- boot.ind[,i]
+  clin.data <- annot.filt[temp.ind,]
+  M.data <- M3c.data.fac.or[temp.ind,,drop=FALSE]
+  M.EFS.df.adj <- cbind.data.frame(clin.data$EFS, clin.data$EFS.status, clin.data$MRD.bin, as.factor(M.data[,2]))
+  rownames(M.EFS.df.adj) <- rownames(clin.data)
+  M.EFS.df.adj <- M.EFS.df.adj[which(complete.cases(M.EFS.df.adj)),]   # Remove missing data (keep only complete cases)
+  colnames(M.EFS.df.adj) <- c("EFS", "EFS.status", "MRD", "Subtype") # Rename the columns
+  # Inside surv tree function
+  set.seed(901+10*i)
+  cp=0
+  xval=20
+  minsplit=2
+  maxdepth=2
+  M.clin.data <- M.EFS.df.adj
+  colnames(M.clin.data)[1:2] <- c("time", "status")
+  tree.m1.efs <- rpart(Surv(time, status)~Subtype, data=M.clin.data, 
+                       control=rpart.control(cp=cp, xval=xval, minsplit=minsplit, maxdepth=maxdepth))
+  #rpart.plot(tree.m1.os)
+  #printcp(tree.m1.os)
+  n.nodes <- length(which(tree.m1.efs$frame$var=="<leaf>"))
+  if(n.nodes !=4){
+    tree.m1.efs2 <- rpart(Surv(time, status)~Subtype, data=M.clin.data, 
+                       control=rpart.control(cp=cp, xval=xval, minsplit=minsplit, maxdepth=3))
+    best <- tree.m1.efs2$cptable[which(tree.m1.efs2$cptable[,2]==3),"CP"]           
+    pruned_tree<- prune(tree.m1.efs2, cp=best)
+    tree.m1.efs <- pruned_tree
+  }
+  n.nodes <- length(which(tree.m1.efs$frame$var=="<leaf>"))
+  #print(paste0("Tree ", i, " has ", n.nodes, " nodes"))
+  sub.term.node.vec[i] <- n.nodes
+  sub.tree.list[[i]] <- tree.m1.efs
+  
+  # Save classification
+  table_res<-as.data.frame.matrix(table(M.clin.data$Subtype,tree.m1.efs$where))
+  table_res$new.node<-c(rep(NA,nrow(table_res)))
+  for (j in 1:nrow(table_res)){
+    table_res$new.node[j]<-colnames(table_res)[which.max(table_res[j,])]
+  }
+  table_res$Subtype <- rownames(table_res)
+  tree.out <- tree.m1.efs$frame
+  tree.out$node <- rownames(tree.out)
+  tree.out.fin <- tree.out[which(tree.out$var=="<leaf>"),c("var", "n", "yval", "node")]
+  tree.out.fin.or <- tree.out.fin[order(tree.out.fin$yval, decreasing=F),]
+  tree.out.fin.or$Risk <- c("Low", "Intermediate-Low", "Intermediate-High", "High")
+  where.node <- cbind.data.frame(table(tree.m1.efs$where))
+  colnames(where.node) <- c("new.node", "n")
+  if(all(tree.out.fin.or$node==c(4,5,6,7))&all(where.node$new.node==c(3,4,6,7))){
+    tree.out.fin.or2 <- tree.out.fin.or
+    tree.out.fin.or2$new.node <- c("3","4","6","7")
+  }
+  else{
+    if(any(duplicated(where.node$n))){
+      tree.out.fin.or2 <- left_join(tree.out.fin.or, where.node, by="n", relationship="many-to-many")
+    }
+    else{
+      tree.out.fin.or2 <- inner_join(tree.out.fin.or, where.node, by="n")
+    }
+    if(length(tree.out.fin.or2)==6){
+      tree.out.fin.or2 <- tree.out.fin.or2[c(1,2,3,6),]
+    }
+  }
+  
+  table.res <- dplyr::inner_join(table_res, tree.out.fin.or2, by="new.node")
+  table.res.fin <- table.res[,c("Subtype", "Risk")]
+  sub.out.list.boot[[i]] <- table.res.fin
+}
+summary(sub.term.node.vec)
+table(as.factor(sub.term.node.vec))
+```
+
+# Look at Splits
+
+```{r}
+#risk.out.df <- do.call(rbind.data.frame, table.res.fin)
+risk.out.df <- data.frame(Subtype=levels(M3c.data.fac.or$Subtype))
+for(j in 1:length(sub.out.list.boot)){
+  temp.df <- sub.out.list.boot[[j]]
+  #temp.df2 <- temp.df %>% distinct(Subtype, Risk, .keep_all=TRUE)
+  risk.out.df <- left_join(risk.out.df, temp.df, by="Subtype")
+  #risk.out.df <- risk.out.df  %>%
+  #distinct(key, value, value2, .keep_all =TRUE)
+  
+}
+rownames(risk.out.df) <- risk.out.df$Subtype
+risk.out.df <- risk.out.df[,-1]
+colnames(risk.out.df) <- paste0("RiskClass", seq(1:ncol(risk.out.df)))
+risk.out.df.t <- as.data.frame(t(risk.out.df))
+
+risk.out.sum.boot <- data.frame()
+for(i in 1:ncol(risk.out.df.t)){
+  n.na <- length(which(is.na(risk.out.df.t[,i])))
+  n.high <- length(which(risk.out.df.t[,i]=="High"))
+  n.inth <- length(which(risk.out.df.t[,i]=="Intermediate-High"))
+  n.intl <- length(which(risk.out.df.t[,i]=="Intermediate-Low"))
+  n.low  <- length(which(risk.out.df.t[,i]=="Low"))
+  n <- n.high+n.inth+n.intl+n.low
+  n.tot <- n + n.na
+  p.high <- n.high/n
+  p.inth <- n.inth/n
+  p.intl <- n.intl/n
+  p.low <- n.low/n
+  out.vec <- c(colnames(risk.out.df.t)[i], n.high, n.inth, n.intl, n.low, n.na, n, n.tot, p.high, p.inth, p.intl, p.low)
+  risk.out.sum.boot <- rbind.data.frame(risk.out.sum.boot, out.vec)
+}
+colnames(risk.out.sum.boot) <- c("Subtype", "High", "Intermediate-High", "Intermediate-Low", "Low", "NA", "N.Boot", "N.Total",
+                            "High.Prop", "Int-High.Prop", "Int-Low.Prop", "Low.Prop")
+risk.out.sum.boot
+```
+
+
+```{r}
+risk.fig.df2 <- risk.out.sum.boot[,c(1:6)]
+risk.fig.df.long2 <- pivot_longer(risk.fig.df2, !Subtype, names_to="Class")
+head(risk.fig.df.long2)
+```
+```{r, fig.height=6, fig.width=10}
+risk.fig.df.long2$value <- as.numeric(risk.fig.df.long2$value)
+sub.or <- risk.fig.df[order(risk.fig.df$Low.Prop, decreasing = F),]
+reor.ind <- match(sub.or$Subtype, risk.fig.df.long2$Subtype)
+risk.fig.df.long2.fac <- risk.fig.df.long2
+risk.fig.df.long2.fac$SubtypeFac <- factor(risk.fig.df.long2$Subtype, levels=sub.or$Subtype)
+ggplot(data=risk.fig.df.long2.fac, aes(x=SubtypeFac, y=value, fill=Class))+geom_col(position="fill") + theme_minimal()+
+  theme( axis.text.x = element_text(angle = 45, hjust=1), legend.position = "bottom", axis.title=element_blank())  + scale_y_continuous(labels = scales::percent) + scale_fill_brewer(palette = "Paired") +
+  coord_flip()
+```
+
+```{r}
+p1 <- ggplot(data=risk.fig.df.long2.fac, aes(x=SubtypeFac, y=value, fill=Class))+geom_col(position="fill") + theme_minimal()+
+  theme( axis.text.x = element_text(angle = 45, hjust=1), legend.position = "bottom", axis.title=element_blank())  + scale_y_continuous(labels = scales::percent) + scale_fill_brewer(palette = "Paired") +
+  coord_flip()
+setwd(res.dir)
+ggsave(filename="SubtypeFactorTreeValidationBarplots_2023-09-05.pdf", p1, device="pdf", width=11, height=8.5)
+```
+
+# Single Random Forest with Overall Data
+
+```{r}
+# Combine all subtype data
+M3c.data=data.frame(M3.subtype[,!colnames(M3.subtype)%in%c("ETP-like", "TAL1 αβ-like", "TAL1 DP-like", "TLX3", "NKX2-1", "HOXA9 TCR", "KMT2A", "MLLT10", "NUP98", "NUP214")], M3.subsubtype[,colnames(M3.subsubtype)%in%c("TLX3 DP-like", "TLX3 Immature", "NKX2-1 TCR", "NKX2-1 Other")], M3.genetic.subtype, check.names = F)
+M3c.cor <- cor(M3c.data)
+# Identify perfectly correlated pairs
+perf.cor <- function(x){
+  return(names(which(x==1)))
+}
+filt.list <- apply(M3c.cor, 1, perf.cor)
+#filt.list # Remove NUP98 and HOXA9_TCR
+filt.len <- sapply(filt.list, length, simplify=TRUE)
+names(filt.len[which(filt.len>1)])
+
+# Convert M3c data names
+library(janitor)
+M3c.data2 <- clean_names(M3c.data)
+rownames(M3c.data2) <- rownames(M3c.data)
+
+
+# Merge with filtered Annot
+M3c.data2$ID <- rownames(M3c.data2)
+annot.filt$ID <- rownames(annot.filt)
+M3c.data.ann <- merge(M3c.data2, annot.filt[,c("ID", "EFS", "EFS.status", "MRD.N", "WBC.bin01", "CNS.bin01", "Sex.bin01")], by="ID")
+```
+
+
+```{r}
+M.EFS.df.adj <- merge(annot.filt[,c("ID", "EFS", "EFS.status", "MRD.N", "WBC.bin01", "CNS.bin01", "Sex.bin01")], M3c.data2,  by="ID")
+rownames(M.EFS.df.adj) <- M.EFS.df.adj$ID
+M.EFS.df.adj <- M.EFS.df.adj[,-1]
+M.EFS.df.adj <- M.EFS.df.adj[which(complete.cases(M.EFS.df.adj)),]   # Remove missing data (keep only complete cases)
+colnames(M.EFS.df.adj) <- c("EFS", "EFS.status", "MRD", "WBC", "CNS", "Sex", colnames(M3c.data2[,-33])) # Rename the columns
+# Inside surv tree function
+set.seed(1122)
+importance="permutation"
+num.trees=1000
+M.clin.data <- M.EFS.df.adj
+colnames(M.clin.data)[1:2] <- c("time", "status")
+rf.efs <- ranger(Surv(time, status)~., data=M.clin.data, case.weights = NULL,
+                       holdout=FALSE, importance=importance, num.trees=num.trees)
+rf.efs
+rf.efs$variable.importance
+```
+
+```{r}
+library("vip")
+vip(rf.efs)
+```
+```{r}
+setwd(res.dir)
+save(rf.efs, file="FullDataRandomForest_SubtypeClin_2023-10-05.RData")
+```
+```{r}
+sub.names <- colnames(M.clin.data)[7:38]
+sum.data <- data.frame()
+for(i in 1:length(sub.names)){
+  temp.name <- sub.names[i]
+  temp.data <- M.clin.data[,c(1:6, grep(temp.name, colnames(M.clin.data)))]
+  temp.data.filt <- temp.data[which(temp.data[,grep(temp.name, colnames(temp.data))]==1),]
+  temp.vec <- c(temp.name, nrow(temp.data.filt), length(which(temp.data.filt$EFS.status==1)))
+  sum.data <- rbind.data.frame(sum.data, temp.vec)
+}
+colnames(sum.data) <- c("Subtype", "Sample Size", "Number of Events")
+write.csv(sum.data, file=paste0(res.dir, "SubtypeSampleEventSummary_2024-03-25.csv"))
+```
+
+
+# Single Tree with Overall Data
+
+```{r}
+M.EFS.df.adj <- cbind.data.frame(annot.filt$EFS, annot.filt$EFS.status, annot.filt$MRD.bin, as.factor(M3c.data.fac.or$Subtype))
+rownames(M.EFS.df.adj) <- rownames(annot.filt)
+M.EFS.df.adj <- M.EFS.df.adj[which(complete.cases(M.EFS.df.adj)),]   # Remove missing data (keep only complete cases)
+colnames(M.EFS.df.adj) <- c("EFS", "EFS.status", "MRD", "Subtype") # Rename the columns
+# Inside surv tree function
+set.seed(345)
+cp=0
+xval=20
+minsplit=2
+maxdepth=2
+M.clin.data <- M.EFS.df.adj
+colnames(M.clin.data)[1:2] <- c("time", "status")
+tree.m1.efs <- rpart(Surv(time, status)~Subtype, data=M.clin.data, 
+                       control=rpart.control(cp=cp, xval=xval, minsplit=minsplit, maxdepth=maxdepth))
+rpart.plot(tree.m1.efs, type=1, faclen=1)
+```
+
+```{r}
+tree.party <- as.party(tree.m1.efs)
+plot(tree.party)
+```
+
+```{r}
+table(tree.m1.efs$where)
+```
+
+```{r}
+M.clin.data$where <- tree.m1.efs$where
+M.clin.data$Group <- ifelse(M.clin.data$where==3, "Low", ifelse(M.clin.data$where==4, "Intermediate-Low", ifelse(M.clin.data$where==6, "Intermediate-High", "High")))
+fit <- survfit(Surv(time, status)~Group, data=M.clin.data)
+ggsurvplot(fit, palette = "Paired", pval=TRUE)
+```
+
+```{r}
+summary(survfit(Surv(time, status)~Group, data=M.clin.data), times=1826.25)
+```
+
+```{r}
+tree.res.tab <-as.data.frame.matrix(table(M.clin.data$Subtype,M.clin.data$Group))
+tree.res.tab$RiskGroup<-c(rep(NA,nrow(tree.res.tab)))
+for (j in 1:nrow(tree.res.tab)){
+  tree.res.tab$RiskGroup[j]<-colnames(tree.res.tab)[which.max(tree.res.tab[j,])]
+}
+tree.res.tab
+```
+
+```{r}
+cox.fit <- coxph(Surv(time, status)~Group, data=M.clin.data)
+cox.fit
+summary(cox.fit)
+length(cox.fit$linear.predictors)
+M.clin.data$CoxScore <- cox.fit$linear.predictors
+table(M.clin.data$Group, M.clin.data$CoxScore)
+```
+
+
+
+```{r}
+M.clin.data$Risk <- as.factor(paste(M.clin.data$Group, M.clin.data$MRD, sep="_"))
+fit <- survfit(Surv(time, status)~Risk, data=M.clin.data)
+ggsurvplot(fit, palette = "Rainbow", pval=TRUE, legend="right")
+```
+
+```{r}
+summary(survfit(Surv(time, status)~Risk, data=M.clin.data), times=1826.25)
+```
+
+```{r}
+cox.fit2 <- coxph(Surv(time, status)~Risk, data=M.clin.data)
+cox.fit2
+summary(cox.fit2)
+M.clin.data$CoxScoreMRD <- cox.fit2$linear.predictors
+table(M.clin.data$Group, M.clin.data$CoxScoreMRD)
+```
+
+```{r}
+setwd(res.dir)
+write.csv(M.clin.data, file="FactorTree_RiskScores_2023-09-01.csv")
+```
+
+## Additional Figures
+
+```{r}
+table(M.clin.data$Risk)
+```
+
+```{r}
+M.clin.data$Risk <- as.factor(paste(M.clin.data$Group, M.clin.data$MRD, sep="_"))
+fit <- survfit(Surv(time, status)~Risk, data=M.clin.data)
+ggsurvplot(fit, palette = "Paired", pval=TRUE, legend="right")
+```
+
+```{r}
+palette.colors(palette="Paired")
+```
+
+```{r}
+M.clin.data <- M.clin.data %>% 
+  mutate(month = round(time/30.417, digit=0))
+
+```
+
+
+```{r, width=3, height=10}
+fit <- survfit(Surv(month, status)~1, data=M.clin.data[which(M.clin.data$Risk=="Low_Negative"),])
+plot <- ggsurvplot(fit, palette="#FDBF6F", conf.int=FALSE, legend="none", xlab="", ylab="")
+plot$plot
+```
+
+```{r}
+setwd(res.dir)
+ggsave(filename="Low-Neg.pdf", plot=plot$plot)
+```
+```{r, width=3, height=10}
+fit <- survfit(Surv(month, status)~1, data=M.clin.data[which(M.clin.data$Risk=="Low_Positive"),])
+lp <- ggsurvplot(fit, palette="#FF7F00", conf.int=FALSE, legend="none", xlab="", ylab="", xlim=c(0, 150), break.time.by=50)
+lp$plot
+```
+
+```{r}
+setwd(res.dir)
+ggsave(filename="Low-Pos.pdf", plot=lp$plot)
+```
+
+```{r, width=3, height=10}
+fit <- survfit(Surv(month, status)~1, data=M.clin.data[which(M.clin.data$Risk=="Intermediate-Low_Negative"),])
+iln <- ggsurvplot(fit, palette="#FB9A99", conf.int=FALSE, legend="none", xlab="", ylab="")
+iln$plot
+```
+
+```{r}
+setwd(res.dir)
+ggsave(filename="Int-Low-Neg.pdf", plot=iln$plot)
+```
+
+```{r, width=3, height=10}
+fit <- survfit(Surv(month, status)~1, data=M.clin.data[which(M.clin.data$Risk=="Intermediate-Low_Positive"),])
+ilp <- ggsurvplot(fit, palette="#E31A1C", conf.int=FALSE, legend="none", xlab="", ylab="")
+ilp$plot
+```
+
+```{r}
+setwd(res.dir)
+ggsave(filename="Int-Low-Pos.pdf", plot=ilp$plot)
+```
+
+```{r, width=3, height=10}
+fit <- survfit(Surv(month, status)~1, data=M.clin.data[which(M.clin.data$Risk=="Intermediate-High_Negative"),])
+ihn <- ggsurvplot(fit, palette="#B2DF8A", conf.int=FALSE, legend="none", xlab="", ylab="", xlim=c(0, 150), break.time.by=50)
+ihn$plot
+```
+
+```{r}
+setwd(res.dir)
+ggsave(filename="Int-High-Neg.pdf", plot=ihn$plot)
+```
+
+```{r, width=3, height=10}
+fit <- survfit(Surv(month, status)~1, data=M.clin.data[which(M.clin.data$Risk=="Intermediate-High_Positive"),])
+ihp <- ggsurvplot(fit, palette="#33A02C", conf.int=FALSE, legend="none", xlab="", ylab="", xlim=c(0, 150), break.time.by=50)
+ihp$plot
+```
+
+```{r}
+setwd(res.dir)
+ggsave(filename="Int-High-Pos.pdf", plot=ihp$plot)
+```
+
+
+```{r, width=3, height=10}
+fit <- survfit(Surv(month, status)~1, data=M.clin.data[which(M.clin.data$Risk=="High_Negative"),])
+hn <- ggsurvplot(fit, palette="#A6CEE3", conf.int=FALSE, legend="none", xlab="", ylab="", xlim=c(0, 150), break.time.by=50)
+hn$plot
+```
+
+```{r}
+setwd(res.dir)
+ggsave(filename="High-Neg.pdf", plot=hn$plot)
+```
+
+```{r, width=3, height=10}
+fit <- survfit(Surv(month, status)~1, data=M.clin.data[which(M.clin.data$Risk=="High_Positive"),])
+hp <- ggsurvplot(fit, palette="#1F78B4", conf.int=FALSE, legend="none", xlab="", ylab="", xlim=c(0, 150), break.time.by=50)
+hp$plot
+```
+
+```{r}
+setwd(res.dir)
+ggsave(filename="High-Pos.pdf", plot=hp$plot)
+```
+
+# Fit Random Forest to Whole Dataset
+
+```{r}
+M.EFS.df.adj <- cbind.data.frame(annot.filt$EFS, annot.filt$EFS.status, annot.filt$MRD.bin,
+                                 annot.filt$WBC.bin01, annot.filt$CNS.bin01, annot.filt$Sex.bin01,
+                                 as.factor(M3c.data.fac.or$Subtype))
+rownames(M.EFS.df.adj) <- rownames(annot.filt)
+M.EFS.df.adj <- M.EFS.df.adj[which(complete.cases(M.EFS.df.adj)),]   # Remove missing data (keep only complete cases)
+colnames(M.EFS.df.adj) <- c("time", "status", "MRD", "WBC", "CNS", "Sex", "Subtype") # Rename the columns
+# Inside surv tree function
+set.seed(828)
+importance="permutation"
+num.trees=1000
+M.clin.data <- M.EFS.df.adj
+rf.m1.efs <- ranger(Surv(time, status)~., data=M.clin.data,
+                       importance=importance, num.trees=num.trees)
+rf.pred <- predict(rf.m1.efs, M.clin.data) # gives output of survival and cumulative hazard over unique death times
+# for each subject
+```
+
+```{r}
+# compare subject 1 and subject 1000 - you could group by estimated 5-year survival? Need to ask Stan
+plot(rf.pred$unique.death.times, rf.pred$survival[1,], type='l', col='orange', ylim=c(0.01,1))
+lines(rf.pred$unique.death.times, rf.pred$survival[1000,], col='blue')
+```
+
+```{r}
+setwd(res.dir)
+save.image("FactorSubtypeTrees_2023-09-05.RData")
+```
+
