@@ -6,10 +6,10 @@ Scripts related to key statistical analysis results from Pölönen et al. The ge
 ## If you use this data in your work, Please cite:
 - Pölönen et al. 
 
-## Accessing processed data:
+## Accessing processed data, such as significant variants, subtypes, statistics results:
 - See supplementary tables of the paper
 
-## Gene expression and other data not included in the supplementary tables:
+## Accessing gene expression and other data:
 - Data DOI: https://doi.org/10.7303/syn54032669
 - Get synapse credentials https://www.synapse.org
 - Access synapse project syn54032669
