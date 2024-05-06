@@ -41,12 +41,12 @@ We conducted univariate analyses of the molecular data sets with four endpoints:
 
 ```{r}
 # Load Filtered Data
-load("Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Data/Data_1309Samples.RData")
+load("Data_1309Samples.RData")
 ```
 
 ```{r}
 # Define results directory
-res.dir <- "Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Results/UnivariateAnalyses/"
+res.dir <- getwd()
 ```
 
 
