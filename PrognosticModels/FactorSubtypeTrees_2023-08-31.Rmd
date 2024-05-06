@@ -56,9 +56,9 @@ library(dendextend)
 
 # Load Data and Splits
 
-load("Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Data/Data_1309Samples.RData")
-load("Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Data/DataSplitIDs_2023-07-18.RData")
-res.dir <- "Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Results/PrognosticModels/RandomForests/"
+load("Data_1309Samples.RData")
+load("DataSplitIDs_2023-07-18.RData")
+res.dir <- getwd()
 
 # Clean clinical data
 # Clean clinical data
