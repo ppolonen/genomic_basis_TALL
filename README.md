@@ -3,7 +3,7 @@
 ## Description:
 Scripts related to key statistical analysis results from Pölönen et al. The genomic basis of childhood T-lineage acute lymphoblastic leukemia
 
-## If you use the data or results in your work, Please cite:
+## If you use this data in your work, Please cite:
 - Pölönen et al. 
 
 ## Accessing processed data:
