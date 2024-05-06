@@ -2,9 +2,10 @@ rm(list=ls());              # start with clean slate in R
 options(stringsAsFactors=F) # turn off the default in R
 
 knitr::opts_chunk$set(echo=T,error=T,eval=T)
+
 # Specify a directory on your local machine
-knitr::opts_knit$set(root.dir = normalizePath("/research_jude/rgs01_jude/groups/mulligrp/projects/T-ALL_GM_Teachey/common/mulligrp/petri_work/GRIN_results"))
-setwd("/research_jude/rgs01_jude/groups/mulligrp/projects/T-ALL_GM_Teachey/common/mulligrp/petri_work/GRIN_results")
+setwd("~/GRIN_results")
+
 library(readxl)
 library(openxlsx)
 library(writexl)
