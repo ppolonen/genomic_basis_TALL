@@ -1,7 +1,7 @@
 # genomic_basis_TALL
 
 ## Description:
-Scripts related to key statistical analysis results Pölönen et al. The genomic basis of childhood T-lineage acute lymphoblastic leukemia
+Scripts related to key statistical analysis results from Pölönen et al. The genomic basis of childhood T-lineage acute lymphoblastic leukemia
 
 ## If you use the data or results in your work, Please cite:
 - Pölönen et al. 
@@ -9,13 +9,13 @@ Scripts related to key statistical analysis results Pölönen et al. The genomic
 ## Accessing processed data:
 - See supplementary tables of the paper
 
-## Gene expression and other data not included in the supplementary tables:
+## Gene expression and other files not included in the supplementary tables:
 - Data DOI: https://doi.org/10.7303/syn54032669
 - Get synapse credentials https://www.synapse.org
 - Access synapse project syn54032669
 - Download project data:
 		```
-		pip install synapseclient
+		pip install synapseclient 
 		synapse get syn54032669 -r
 		```
 ## Accessing raw data:
@@ -24,4 +24,3 @@ Scripts related to key statistical analysis results Pölönen et al. The genomic
 
 ## Data visualization in the ProteinPaint and GenomePaint:
 https://viz.stjude.cloud/mullighan-lab/collection/the-genomic-basis-of-childhood-t-lineage-acute-lymphoblastic-leukemia~29
-
