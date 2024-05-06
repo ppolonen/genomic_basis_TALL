@@ -16,14 +16,14 @@ library(janitor)
 library(globaltest)
 
 # Source the univariate screening function
-source("Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/Code/Functions/univariate_screen_gt.R")
+source("univariate_screen_gt.R")
 
 # Define results directory
-res.dir <- "Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Results/UnivariateAnalyses/"
+res.dir <- getwd()
 
 
 # data path locally
-load("Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Data/Data_1309Samples.RData")
+load("Data_1309Samples.RData")
 
 # Create grouped variables
 annot$MRD.ord <- ifelse(is.na(annot$Day.29.MRD), NA, ifelse(annot$Day.29.MRD<0.1, "Negative", ifelse(annot$Day.29.MRD<10, "Low Positive", "High Positive")))
@@ -92,7 +92,7 @@ sig.variants <- unlist(sig.gene.list)
 # Run univariate screen on filtered variant list
 M5.vars.sig <- M5.AllLesions.variants2[,which(colnames(M5.AllLesions.variants2) %in% sig.variants)]
 M5.vars.sig.oldnames <- colnames(M5.AllLesions.variants[,which(colnames(M5.AllLesions.variants2) %in% sig.variants)])
-source("Z:/ResearchHome/Groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/Code/Functions/univariate_screen.R")
+source("univariate_screen.R")
 M5.screen.df <- uni_screen(annot, M5.vars.sig)
 M5.screen.df$MolecularFeatureOld <- M5.vars.sig.oldnames
 M5.screen.df <- M5.screen.df[,c(1,65,2:64)]
