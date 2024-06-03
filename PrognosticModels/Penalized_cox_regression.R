@@ -39,8 +39,8 @@ options(encoding = "UTF-8") # sets string encoding to UTF-8 instead of ANSI
 #***************************** Set Directories: *******************************************
 message("[STATUS] SETTING WD...", appendLF = T)
 
-wd="/research_jude/rgs01_jude/groups/mulligrp/projects/T-ALL_GM_Teachey/common/mulligrp/petri_work/outcome/"
-out="/research_jude/rgs01_jude/groups/mulligrp/projects/T-ALL_GM_Teachey/common/mulligrp/petri_work/outcome/"
+wd=""
+out=""
 
 setwd(wd)
 #******************************************************************************************
@@ -48,8 +48,8 @@ setwd(wd)
 #***************************** Input Data: ********************************************
 message("[INPUT] ", appendLF = T)
 
-load("/research_jude/rgs01_jude/groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Data/Data_1309Samples.RData")
-load("/research_jude/rgs01_jude/groups/mulligrp/projects/T-ALL_GM_Teachey/common/biostat/anna_work/PrognosticModels/July2023FinalData/Data/DataSplitIDs_2023-07-18.RData")
+load("Data_1309Samples.RData")
+load("DataSplitIDs_2023-07-18.RData")
 
 #***************************** Computations: ********************************************
 message("[STATUS] WORKING...", appendLF = T)
