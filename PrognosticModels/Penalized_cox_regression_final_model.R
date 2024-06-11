@@ -23,15 +23,14 @@ ptm <- proc.time()
 options(stringsAsFactors=F)
 message("[STATUS] SETTING TOOLS...", appendLF = T)
 
-# load all
-files.sources = list.files(file.path(GIT_HOME, tools), pattern = ".R$", recursive = T, full.names = T)
-invisible(sapply(files.sources, source))
-
 # basic packages
 suppressMessages(library(data.table))
 suppressMessages(library(parallel))
 suppressMessages(require(tidyverse))
 suppressMessages(library(dplyr))
+library(survival)
+require(doMC)
+require(glmnet)
 
 message("[STATUS] SETTING OPTIONS...", appendLF = T)
 options(scipen = 5) # turns off scientific notation
@@ -40,7 +39,7 @@ options(encoding = "UTF-8") # sets string encoding to UTF-8 instead of ANSI
 #***************************** Set Directories: *******************************************
 message("[STATUS] SETTING WD...", appendLF = T)
 
-wd=""
+wd=getwd()
 out=""
 
 setwd(wd)
@@ -49,8 +48,8 @@ setwd(wd)
 #***************************** Input Data: ********************************************
 message("[INPUT] ", appendLF = T)
 
-load("MULLI-T-ALL-GM-Teachey_outcome_data_simplified_CNV_SNV.Rdata")
-library(survival)
+load("MULLI-T-ALL-GM-Teachey_outcome_data_simplified_CNV_SNV.Rdata") # download syn60580346
+
 # Clean clinical data
 annot$status <- factor(annot$OS.status, levels=c(0, 1), labels=c("Alive", "Died"))
 annot$MRD.ord <- as.factor(ifelse(annot$Day.29.MRD<0.1, "Negative", ifelse(annot$Day.29.MRD<10, "Low Positive", ifelse(is.na(annot$Day.29.MRD), NA, "High Positive"))))
@@ -99,8 +98,7 @@ formdf1 <- as.formula(paste(" ~ ", paste(colnames(data),collapse="+")))
 x=model.matrix(formdf1, data=data[!rm,])
 y=Surv(time[!rm], status[!rm])
 
-require(doMC)
-registerDoMC(cores = 25)
+registerDoMC(cores = 10)
 set.seed(2023)
 
 fit <- glmnet::cv.glmnet(x=x, y=y, family = "cox", nfolds = 10, alpha = 0.9, standardize=F, parallel = T)
@@ -117,12 +115,19 @@ dim(coefficients_all)
 
 comprisk=data[,match(rownames(coefficients_all), colnames(data))]
 risk_patient=as.numeric(as.numeric(coefficients_all) %*% data.matrix(t(comprisk)))
+
+risk_patient2=as.numeric(coefficients_all) * as.data.frame(t(t(comprisk)))
+risk_patient2=rowSums(risk_patient2)
+
+b=apply(comprisk, 1, function(v){
+  v*as.numeric(coefficients_all)
+})
+
 annot.filt=annot[match(rownames(comprisk), rownames(annot)),]
 
 concordance <- intsurv::cIndex(time=time[!rm], event=status[!rm], risk_score=risk_patient[!rm])[1]
 concordance
 
-formdf1 <- as.formula(paste(" ~ ", ))
 summary(coxph(formula = y ~ risk_patient, data = data.frame(risk_patient)))
 
 #***************************** Output Data: ***********************************************
