@@ -116,15 +116,6 @@ dim(coefficients_all)
 comprisk=data[,match(rownames(coefficients_all), colnames(data))]
 risk_patient=as.numeric(as.numeric(coefficients_all) %*% data.matrix(t(comprisk)))
 
-risk_patient2=as.numeric(coefficients_all) * as.data.frame(t(t(comprisk)))
-risk_patient2=rowSums(risk_patient2)
-
-b=apply(comprisk, 1, function(v){
-  v*as.numeric(coefficients_all)
-})
-
-annot.filt=annot[match(rownames(comprisk), rownames(annot)),]
-
 concordance <- intsurv::cIndex(time=time[!rm], event=status[!rm], risk_score=risk_patient[!rm])[1]
 concordance
 
